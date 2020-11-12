@@ -48,6 +48,8 @@ extra-source-files:  CHANGELOG.md
 
 
 library
+  -- ghc-options: -Wall -Werror
+  ghc-options: -Wall
   -- Modules exported by the library.
   exposed-modules:     MyLib
 
