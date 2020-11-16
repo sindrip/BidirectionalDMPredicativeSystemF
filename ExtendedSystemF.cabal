@@ -51,7 +51,8 @@ library
   -- ghc-options: -Wall -Werror
   ghc-options: -Wall
   -- Modules exported by the library.
-  exposed-modules:     MyLib
+  exposed-modules:     Parser
+                     , MyLib
 
   -- Modules included in this library but not exported.
   -- other-modules:
@@ -61,6 +62,9 @@ library
 
   -- Other library packages from which modules are imported.
   build-depends:       base ^>=4.13.0.0
+                     , megaparsec
+                     , parser-combinators
+                     , text
 
   -- Directories containing source files.
   hs-source-dirs:      lib
