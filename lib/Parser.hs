@@ -4,13 +4,19 @@
 module Parser (Name,Type(..),Term(..)) where
 
 import Control.Monad.Combinators.Expr
+import Control.Monad.Reader
+import Data.List (elemIndex)
 import Data.Text (Text)
 import Data.Void
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
 
-type Parser = Parsec Void Text
+-- type Parser = Parsec Void Text
+type Parser = ParsecT Void Text (Reader [String])
+
+bind :: String -> Parser a -> Parser a
+bind x = local (x :)
 
 ws :: Parser ()
 ws =
@@ -30,6 +36,8 @@ parens = between (symbol "(") (symbol ")")
 
 type Name = String
 
+type Idx = Int
+
 data Type
   = TyArrow Type Type
   | TyUnit
@@ -37,7 +45,7 @@ data Type
   deriving (Eq)
 
 data Term
-  = TmVar Name
+  = TmVar Name Idx
   | TmAbs Name Type Term
   | TmApp Term Term
   | TmUnit
@@ -49,7 +57,7 @@ instance Show Type where
   show (TyVar n) = n
 
 instance Show Term where
-  show (TmVar n) = n
+  show (TmVar n i) = n ++ "(" ++ show i ++ ")"
   show (TmAbs n ty tm) = "(λ" ++ n ++ " : " ++ show ty ++ " . " ++ show tm ++ ")"
   show (TmApp t1 t2) = "(" ++ show t1 ++ " " ++ show t2 ++ ")"
   show TmUnit = "unit"
@@ -81,27 +89,35 @@ pType = makeExprParser pTypeTerm opTableTy
 
 pAbs :: Parser Term
 pAbs = do
-  _ <- lexeme "/"
+  _ <- symbol "/"
   n <- pName
-  _ <- lexeme ":"
+  exists <- asks (elem n)
+  -- Add parse error if binding variable is shadowed
+  when exists $ fail $ n ++ " already bound"
+  _ <- symbol ":"
   ty <- pType
-  _ <- lexeme "."
-  TmAbs n ty <$> pTerm
+  _ <- symbol "."
+  tm <- bind n pTerm
+  return $ TmAbs n ty tm
 
 pAtom :: Parser Term
 pAtom = do
   n <- pName
-  case n of
-    "unit" -> return TmUnit
-    _ -> return $ TmVar n
+  if n == "unit"
+    then return TmUnit
+    else do
+      i <- asks (elemIndex n)
+      case i of
+        Nothing -> return $ TmVar n (-1)
+        Just v -> return $ TmVar n v
 
 pTermNonApp :: Parser Term
-pTermNonApp = choice
- [
-     parens pTerm,
-     pAbs,
-     pAtom
- ]
+pTermNonApp =
+  choice
+    [ parens pTerm,
+      pAbs,
+      pAtom
+    ]
 
 opTableTm :: [[Operator Parser Term]]
 opTableTm =

@@ -65,6 +65,7 @@ library
                      , megaparsec
                      , parser-combinators
                      , text
+                     , mtl
 
   -- Directories containing source files.
   hs-source-dirs:      lib
