@@ -3,25 +3,21 @@
 
 module Parser () where
 
--- (1)
 import Control.Monad.Combinators.Expr
 import Data.Text (Text)
 import Data.Void
 import Text.Megaparsec hiding (State)
 import Text.Megaparsec.Char
 import qualified Text.Megaparsec.Char.Lexer as L
-import Text.Megaparsec.Debug
 
 type Parser = Parsec Void Text
 
 ws :: Parser ()
 ws =
   L.space
-    space1 -- (2)
+    space1
     empty
     empty
--- (L.skipLineComment "//")       -- (3)
--- (L.skipBlockComment "/*" "*/") -- (4)
 
 lexeme :: Parser a -> Parser a
 lexeme = L.lexeme ws
@@ -31,12 +27,6 @@ symbol = L.symbol ws
 
 parens :: Parser a -> Parser a
 parens = between (symbol "(") (symbol ")")
-
--- charLiteral :: Parser Char
--- charLiteral = between (char '\'') (char '\'') L.charLiteral
-
--- stringLiteral :: Parser String
--- stringLiteral = char '\"' *> manyTill L.charLiteral (char '\"')
 
 type Name = String
 
@@ -64,24 +54,21 @@ instance Show Term where
   show (TmApp t1 t2) = "(" ++ show t1 ++ " " ++ show t2 ++ ")"
   show TmUnit = "unit"
 
--- pName :: Parser Name
--- pName = lexeme $ many L.charLiteral
 pName :: Parser Name
-pName = lexeme $ (:) <$> letterChar <*> many letterChar
+pName = lexeme $ (:) <$> letterChar <*> many alphaNumChar
 
--- pName :: Parser Name
--- pName = lexeme ((:) <$> letterChar <*> many alphaNumChar)
-
-pUnitTy :: Parser Type
-pUnitTy = do
-  _ <- lexeme "Unit"
-  return TyUnit
+pAtomTy :: Parser Type
+pAtomTy = do
+  n <- pName
+  case n of
+    "Unit" -> return TyUnit
+    _ -> return $ TyVar n
 
 pTypeTerm :: Parser Type
 pTypeTerm =
   choice
     [ parens pType,
-      pUnitTy
+      pAtomTy
     ]
 
 opTableTy :: [[Operator Parser Type]]
