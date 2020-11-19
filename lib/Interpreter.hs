@@ -1,4 +1,4 @@
-module Interpreter (interpret) where
+module Interpreter (interpret, zero, one, plus) where
 
 import Parser
 
@@ -38,3 +38,12 @@ interpret (TmApp tm1 tm2) =
       Nothing -> Nothing
       Just x -> Just (TmApp x tm2)
 interpret TmUnit = Just TmUnit
+
+zero :: Term
+zero = TmAbs "f" TyUnit (TmAbs "x" TyUnit (TmVar "x" 0))
+
+one :: Term
+one = TmAbs "f" TyUnit (TmAbs "x" TyUnit (TmApp (TmVar "f" 1) (TmVar "x" 0)))
+
+plus :: Term
+plus = TmAbs "m" TyUnit (TmAbs "n" TyUnit (TmAbs "f" TyUnit (TmAbs "x" TyUnit (TmApp (TmApp (TmVar "m" 3) (TmVar "f" 1)) (TmApp (TmApp (TmVar "n" 2) (TmVar "f" 1)) (TmVar "x" 0))))))
