@@ -1,7 +1,7 @@
 -- Based upon https://markkarpov.com/tutorial/megaparsec.html
 {-# LANGUAGE OverloadedStrings #-}
 
-module Parser () where
+module Parser (Name,Type(..),Term(..)) where
 
 import Control.Monad.Combinators.Expr
 import Data.Text (Text)
