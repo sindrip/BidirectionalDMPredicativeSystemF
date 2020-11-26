@@ -1,10 +1,11 @@
 -- Based upon https://markkarpov.com/tutorial/megaparsec.html
 {-# LANGUAGE OverloadedStrings #-}
 
-module Parser (Name,Type(..),Term(..)) where
+module Parser (Name, Type (..), Term (..)) where
 
 import Control.Monad.Combinators.Expr
 import Control.Monad.Reader
+import Control.Monad.State.Strict
 import Data.List (elemIndex)
 import Data.Text (Text)
 import Data.Void
@@ -45,7 +46,8 @@ data Type
   deriving (Eq)
 
 data Term
-  = TmVar Name Idx
+  = TmAnn Term Type
+  | TmVar Name Idx
   | TmAbs Name Type Term
   | TmApp Term Term
   | TmUnit
@@ -57,6 +59,7 @@ instance Show Type where
   show (TyVar n) = n
 
 instance Show Term where
+  show (TmAnn tm ty) = "(" ++ show tm ++ ":" ++ show ty ++ ")"
   show (TmVar n i) = n ++ "(" ++ show i ++ ")"
   show (TmAbs n ty tm) = "(λ" ++ n ++ " : " ++ show ty ++ " . " ++ show tm ++ ")"
   show (TmApp t1 t2) = "(" ++ show t1 ++ " " ++ show t2 ++ ")"
@@ -111,10 +114,20 @@ pAtom = do
         Nothing -> return $ TmVar n (-1)
         Just v -> return $ TmVar n v
 
+pAnnTerm :: Parser Term
+pAnnTerm = parens go
+  where
+    go = do
+      tm <- pTerm
+      _ <- symbol ":"
+      -- ty <- pType
+      TmAnn tm <$> pType
+
 pTermNonApp :: Parser Term
 pTermNonApp =
   choice
-    [ parens pTerm,
+    [ try pAnnTerm,
+      parens pTerm,
       pAbs,
       pAtom
     ]
