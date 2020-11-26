@@ -51,7 +51,8 @@ library
   -- ghc-options: -Wall -Werror
   ghc-options: -Wall
   -- Modules exported by the library.
-  exposed-modules:     Parser
+  exposed-modules:     TypeChecker
+                     , Parser
                      , Interpreter
 
   -- Modules included in this library but not exported.
