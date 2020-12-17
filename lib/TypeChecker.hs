@@ -8,20 +8,13 @@ data Name
 
 type Idx = Int
 
-data CKind = Star
-  deriving (Show)
-
 data CType
   = TyArrow CType CType
   | TyUnit
   | TyVar Name
   deriving (Show, Eq)
 
-data Info
-  = HasKind CKind
-  | HasType CType
-
-type Context = [(Name, Info)]
+type Context = [(Name, CType)]
 
 data TermSynth
   = Ann TermCheck CType
@@ -42,24 +35,16 @@ data TermCheck
 zero :: TermCheck
 zero = Abs (Abs (Inf (Bound 0)))
 
-checkKind :: Context -> CType -> CKind -> Bool
-checkKind _ TyUnit Star = True
-checkKind ctx (TyArrow t1 t2) Star = checkKind ctx t1 Star && checkKind ctx t2 Star
-checkKind _ _ _ = False
-
 synthType :: Context -> TermSynth -> Maybe CType
 synthType = synthType' 0
 
 synthType' :: Int -> Context -> TermSynth -> Maybe CType
 synthType' i ctx (Ann tm ty) =
-  if checkKind ctx ty Star && checkType i ctx tm ty
+  if checkType i ctx tm ty
     then Just ty
     else Nothing
 synthType' _ _ Unit = Just TyUnit
-synthType' i ctx (Free n) =
-  case lookup n ctx of
-    Just (HasType ty) -> Just ty
-    _ -> Nothing
+synthType' _ ctx (Free n) = lookup n ctx
 synthType' i ctx (App ts tc) =
   case synthType' i ctx ts of
     Just (TyArrow ty1 ty2) -> if checkType i ctx tc ty1 then Just ty2 else Nothing
@@ -72,7 +57,7 @@ checkType i ctx (Inf e) ty =
     Just t -> t == ty
     Nothing -> False
 checkType i ctx (Abs tm) (TyArrow ty1 ty2) =
-  checkType (i + 1) ((Local i, HasType ty1) : ctx) (checkSubst 0 (Free (Local i)) tm) ty2
+  checkType (i + 1) ((Local i, ty1) : ctx) (checkSubst 0 (Free (Local i)) tm) ty2
 checkType _ _ _ _ = False
 
 synthSubst :: Int -> TermSynth -> TermSynth -> TermSynth
