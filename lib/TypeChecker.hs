@@ -7,7 +7,6 @@ module TypeChecker where
 data Name
   = Global String
   | Local Int
-  | Quote Int
   deriving (Show, Eq)
 
 type Idx = Int
