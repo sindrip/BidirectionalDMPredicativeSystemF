@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE StandaloneDeriving #-}
 
 module TypeChecker where
 
@@ -12,12 +13,22 @@ data Name
 type Idx = Int
 
 data TypeCategory = Monotype | Polytype
+  deriving (Show, Eq)
 
 data CType :: TypeCategory -> * where
   TyArrow :: CType a -> CType a -> CType a
   TyUnit :: CType a
   TyVar :: Name -> CType a
-  deriving (Show, Eq)
+  TyExists :: Name -> CType a
+  TyForall :: Name -> CType 'Polytype -> CType 'Polytype
+
+-- data CTypeLinear
+
+-- TypeClass Types
+
+deriving instance Show (CType a)
+
+deriving instance Eq (CType a)
 
 type Context a = [(Name, CType a)]
 
@@ -52,6 +63,7 @@ synthType' i ctx (App ts tc) =
     _ -> Nothing
 synthType' _ _ _ = Nothing
 
+-- todo forall/exists
 checkType :: Int -> Context a -> Term a -> CType a -> Bool
 checkType i ctx (Abs tm) (TyArrow ty1 ty2) =
   checkType (i + 1) ((Local i, ty1) : ctx) (subst 0 (Free (Local i)) tm) ty2
