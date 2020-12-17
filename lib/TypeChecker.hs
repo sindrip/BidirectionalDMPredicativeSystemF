@@ -1,3 +1,7 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE KindSignatures #-}
+
 module TypeChecker where
 
 data Name
@@ -8,37 +12,35 @@ data Name
 
 type Idx = Int
 
-data CType
-  = TyArrow CType CType
-  | TyUnit
-  | TyVar Name
+data TypeCategory = Monotype | Polytype
+
+data CType :: TypeCategory -> * where
+  TyArrow :: CType a -> CType a -> CType a
+  TyUnit :: CType a
+  TyVar :: Name -> CType a
   deriving (Show, Eq)
 
-type Context = [(Name, CType)]
+type Context a = [(Name, CType a)]
 
-data TermSynth
-  = Ann TermCheck CType
+data Term a
+  = Ann (Term a) (CType a)
   | Free Name
   | Bound Idx
   | Unit
-  | App TermSynth TermCheck
-  deriving (Show, Eq)
-
-data TermCheck
-  = Inf TermSynth
-  | Abs TermCheck
+  | App (Term a) (Term a)
+  | Abs (Term a)
   deriving (Show, Eq)
 
 -- zero :: Term
 -- zero = TmAbs "f" TyUnit (TmAbs "x" TyUnit (TmVar "x" 0))
 
-zero :: TermCheck
-zero = Abs (Abs (Inf (Bound 0)))
+zero :: (Term a)
+zero = Abs (Abs (Bound 0))
 
-synthType :: Context -> TermSynth -> Maybe CType
+synthType :: Context a -> Term a -> Maybe (CType a)
 synthType = synthType' 0
 
-synthType' :: Int -> Context -> TermSynth -> Maybe CType
+synthType' :: Int -> Context a -> Term a -> Maybe (CType a)
 synthType' i ctx (Ann tm ty) =
   if checkType i ctx tm ty
     then Just ty
@@ -51,22 +53,17 @@ synthType' i ctx (App ts tc) =
     _ -> Nothing
 synthType' _ _ _ = Nothing
 
-checkType :: Int -> Context -> TermCheck -> CType -> Bool
-checkType i ctx (Inf e) ty =
-  case synthType' i ctx e of
-    Just t -> t == ty
-    Nothing -> False
+checkType :: Int -> Context a -> Term a -> CType a -> Bool
 checkType i ctx (Abs tm) (TyArrow ty1 ty2) =
-  checkType (i + 1) ((Local i, ty1) : ctx) (checkSubst 0 (Free (Local i)) tm) ty2
-checkType _ _ _ _ = False
+  checkType (i + 1) ((Local i, ty1) : ctx) (subst 0 (Free (Local i)) tm) ty2
+checkType i ctx tm ty = case synthType' i ctx tm of
+  Just infTy -> infTy == ty
+  Nothing -> False
 
-synthSubst :: Int -> TermSynth -> TermSynth -> TermSynth
-synthSubst i tm1 (Ann tm2 ty) = Ann (checkSubst i tm1 tm2) ty
-synthSubst i tm (Bound j) = if i == j then tm else Bound j
-synthSubst _ _ (Free y) = Free y
-synthSubst i tm (App tm1 tm2) = App (synthSubst i tm tm1) (checkSubst i tm tm2)
-synthSubst _ _ Unit = Unit
-
-checkSubst :: Int -> TermSynth -> TermCheck -> TermCheck
-checkSubst i tm1 (Inf tm2) = Inf (synthSubst i tm1 tm2)
-checkSubst i tm1 (Abs tm2) = Abs (checkSubst (i + 1) tm1 tm2)
+subst :: Int -> Term a -> Term a -> Term a
+subst i tm1 (Ann tm2 ty) = Ann (subst i tm1 tm2) ty
+subst i tm1 (Abs tm2) = Abs (subst (i + 1) tm1 tm2)
+subst i tm (Bound j) = if i == j then tm else Bound j
+subst _ _ (Free y) = Free y
+subst i tm (App tm1 tm2) = App (subst i tm tm1) (subst i tm tm2)
+subst _ _ Unit = Unit
