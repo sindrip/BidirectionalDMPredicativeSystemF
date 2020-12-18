@@ -82,6 +82,45 @@ data CtxElem
 
 type Context = [CtxElem]
 
+existentials :: Context -> [TyName]
+existentials = go
+  where
+    go [] = []
+    go ((CtxExist n) : xs) = n : go xs
+    go ((CtxExistSolved n _) : xs) = n : go xs
+    go (_ : xs) = go xs
+
+foralls :: Context -> [TyName]
+foralls = go
+  where
+    go [] = []
+    go ((CtxForall n) : xs) = n : go xs
+    go (_ : xs) = go xs
+
+vars :: Context -> [TmName]
+vars = go
+  where
+    go [] = []
+    go ((CtxVar n _) : xs) = n : go xs
+    go (_ : xs) = go xs
+
+markers :: Context -> [TyName]
+markers = go
+  where
+    go [] = []
+    go ((CtxMarker n) : xs) = n : go xs
+    go (_ : xs) = go xs
+
+lookupSolution :: Context -> TyName -> Maybe (CType 'Monotype)
+lookupSolution [] _ = Nothing
+lookupSolution (c : cs) n =
+  case c of
+    (CtxExistSolved vn ty) ->
+      if vn == n
+        then Just ty
+        else lookupSolution cs n
+    _ -> lookupSolution cs n
+
 lookupTypeOfVar :: Context -> TmName -> Maybe (CType 'Polytype)
 lookupTypeOfVar [] _ = Nothing
 lookupTypeOfVar (c : cs) n =
@@ -91,6 +130,74 @@ lookupTypeOfVar (c : cs) n =
         then Just ty
         else lookupTypeOfVar cs n
     _ -> lookupTypeOfVar cs n
+
+dropMarker :: CtxElem -> Context -> Context
+dropMarker m ctx = tail $ dropWhile (/= m) ctx
+
+breakMarker :: CtxElem -> Context -> (Context, Context)
+breakMarker m ctx = let (l, _ : r) = break (== m) ctx in (l, r)
+
+replaceCtxExistWith :: Context -> CtxElem -> Context -> Context
+replaceCtxExistWith ctx e toInsert =
+  let (l, r) = breakMarker e ctx
+   in l ++ toInsert ++ r
+
+ctxWF :: ScopeGen Bool
+ctxWF = do
+  ctx <- gets context
+  go ctx
+  where
+    go :: Context -> ScopeGen Bool
+    go [] = return True
+    go (c : cs) = case c of
+      CtxForall n -> return $ n `notElem` foralls cs
+      CtxVar n ty -> do
+        modify (\s -> s {context = cs})
+        chk <- (&&) (n `notElem` vars cs) <$> typeWF ty
+        modify (\s -> s {context = cs})
+        return chk
+      CtxExist n -> return $ n `notElem` existentials cs
+      CtxExistSolved n ty -> do
+        modify (\s -> s {context = cs})
+        chk <- (&&) (n `notElem` existentials cs) <$> typeWF ty
+        modify (\s -> s {context = cs})
+        return chk
+      CtxMarker n ->
+        return $ n `notElem` markers cs && n `notElem` existentials cs
+
+typeWF :: CType a -> ScopeGen Bool
+typeWF ty = do
+  ctx <- gets context
+  case ty of
+    TyVar n -> return $ n `elem` foralls ctx
+    TyUnit -> return True
+    TyArrow a b -> liftA2 (&&) (typeWF a) (typeWF b)
+    TyForall a -> do
+      freeCnt <- gets freeCount
+      let alpha = TyN freeCnt
+      let ctx' = CtxForall alpha : ctx
+
+      modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
+      chk <- typeWF (typeSubst (TyI 0) (TyExists alpha) a)
+      modify (\s -> s {freeCount = freeCnt, context = ctx})
+      return chk
+    TyExists n -> return $ n `elem` existentials ctx
+
+apply :: Context -> CType 'Polytype -> CType 'Polytype
+apply gamma ty = case ty of
+  TyUnit -> TyUnit
+  TyVar n -> TyVar n
+  TyForall t -> TyForall (apply gamma t)
+  tye@(TyExists n) ->
+    case lookupSolution gamma n of
+      Just t -> apply gamma (ctypeToPoly t)
+      Nothing -> tye
+  TyArrow ty1 ty2 -> TyArrow (apply gamma ty1) (apply gamma ty2)
+
+comesBefore :: Context -> TyName -> TyName -> Bool
+comesBefore gamma alpha beta =
+  let l = dropMarker (CtxExist beta) gamma
+   in alpha `elem` existentials l
 
 data Term a
   = Ann (Term a) (CType a)
@@ -139,8 +246,8 @@ synthType' (Abs tm) =
   do
     ctx <- gets context
     freeCnt <- gets freeCount
-    let alpha = TyN (freeCnt + 1)
-    let beta = TyN (freeCnt + 2)
+    let alpha = TyN freeCnt
+    let beta = TyN (freeCnt + 1)
     let ctx' = CtxExist beta : CtxExist alpha : CtxMarker alpha : ctx
 
     modify (\s -> s {freeCount = freeCnt + 2, context = ctx'})
@@ -152,9 +259,37 @@ synthType' (Abs tm) =
       else return Nothing
 
 synthApplyType :: Term 'Polytype -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
-synthApplyType = undefined
+synthApplyType tm (TyForall ty) =
+  do
+    ctx <- gets context
+    freeCnt <- gets freeCount
+    let alpha = TyN freeCnt
+    let ctx' = CtxExist alpha : ctx
 
--- todo forall/exists
+    modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
+    t <- synthApplyType tm (typeSubst (TyI 0) (TyExists alpha) ty)
+    modify (\s -> s {freeCount = freeCnt, context = ctx})
+
+    return t
+synthApplyType tm (TyExists ty) =
+  do
+    ctx <- gets context
+    freeCnt <- gets freeCount
+    let alpha = TyN freeCnt
+    let beta = TyN (freeCnt + 1)
+    let ctxToAdd = [CtxExistSolved ty (TyArrow (TyExists alpha) (TyExists beta)), CtxExist alpha, CtxExist beta]
+    let ctx' = replaceCtxExistWith ctx (CtxExist ty) ctxToAdd
+
+    modify (\s -> s {freeCount = freeCnt + 2, context = ctx'})
+
+    chk <- checkType tm (TyExists alpha)
+    return $ if chk then Just $ TyExists beta else Nothing
+synthApplyType tm (TyArrow ty1 ty2) =
+  do
+    chk <- checkType tm ty1
+    return $ if chk then Just ty2 else Nothing
+synthApplyType _ _ = return Nothing
+
 checkType :: Term 'Polytype -> CType 'Polytype -> ScopeGen Bool
 checkType (Abs tm) (TyArrow ty1 ty2) =
   do
@@ -175,12 +310,16 @@ checkType tm (TyForall ty) =
     modify (\s -> s {typeIdx = tyIdx, context = ctx})
     return ret
 checkType Unit TyUnit = return True
+-- Apply context as substitution
 checkType tm ty =
   do
-    t <- synthType' tm
-    return $ case t of
-      Just infTy -> infTy == ty
-      Nothing -> False
+    mt <- synthType' tm
+    case mt of
+      Just t -> subtype t ty
+      Nothing -> return False
+
+subtype :: CType a -> CType a -> ScopeGen Bool
+subtype = undefined
 
 subst :: TmName -> Term a -> Term a -> Term a
 subst i tm1 (Ann tm2 ty) = Ann (subst i tm1 tm2) ty
@@ -196,5 +335,12 @@ typeSubst i ty' (TyVar n) =
   if i == n
     then ty'
     else TyVar n
-typeSubst i ty' (TyExists n) = undefined
-typeSubst i ty' (TyForall ty1) = undefined
+typeSubst i ty' (TyExists n) =
+  if i == n
+    then ty'
+    else TyExists n
+typeSubst i ty' (TyForall ty1) =
+  case i of
+    (TyI 0) -> TyForall ty1
+    (TyI n) -> TyForall (typeSubst (TyI (n -1)) ty' ty1)
+    _ -> TyForall (typeSubst i ty' ty1)
