@@ -18,14 +18,26 @@ newtype TyIdx = TyIdx Int
 newtype FreeName = FreeName Int
   deriving (Show, Eq, Num)
 
-data Indices = Indices TmIdx TyIdx
+data TmName = TmI TmIdx | TmN FreeName
   deriving (Show, Eq)
+
+data TyName = TyI TyIdx | TyN FreeName
+  deriving (Show, Eq)
+
+addTmName :: TmName -> Int -> TmName
+addTmName (TmI tmIdx) i = TmI (tmIdx + TmIdx i)
+addTmName (TmN tmn) i = TmN (tmn + FreeName i)
+
+addTyName :: TyName -> Int -> TyName
+addTyName (TyI tyIdx) i = TyI (tyIdx + TyIdx i)
+addTyName (TyN tyn) i = TyN (tyn + FreeName i)
 
 -- The state of indices and free names generate
 data ScopeState = ScopeState
   { termIdx :: TmIdx,
     typeIdx :: TyIdx,
-    freeCount :: FreeName
+    freeCount :: FreeName,
+    context :: Context
   }
   deriving (Show, Eq)
 
@@ -38,8 +50,8 @@ data TypeCategory = Monotype | Polytype
 data CType :: TypeCategory -> * where
   TyArrow :: CType a -> CType a -> CType a
   TyUnit :: CType a
-  TyVar :: TyIdx -> CType a
-  TyExists :: TyIdx -> CType a
+  TyVar :: TyName -> CType a
+  TyExists :: TyName -> CType a
   TyForall :: CType 'Polytype -> CType 'Polytype
 
 deriving instance Show (CType a)
@@ -61,15 +73,16 @@ ctypeToMono (TyExists n) = Just (TyExists n)
 ctypeToMono (TyForall _) = Nothing
 
 data CtxElem
-  = CtxForall TyIdx
-  | CtxVar TmIdx (CType 'Polytype)
-  | CtxExist TyIdx
-  | CtxExistSolved TyIdx (CType 'Monotype)
-  | CtxMarker TyIdx
+  = CtxForall TyName
+  | CtxVar TmName (CType 'Polytype)
+  | CtxExist TyName
+  | CtxExistSolved TyName (CType 'Monotype)
+  | CtxMarker TyName
+  deriving (Show, Eq)
 
 type Context = [CtxElem]
 
-lookupTypeOfVar :: Context -> TmIdx -> Maybe (CType 'Polytype)
+lookupTypeOfVar :: Context -> TmName -> Maybe (CType 'Polytype)
 lookupTypeOfVar [] _ = Nothing
 lookupTypeOfVar (c : cs) n =
   case c of
@@ -81,7 +94,7 @@ lookupTypeOfVar (c : cs) n =
 
 data Term a
   = Ann (Term a) (CType a)
-  | Var TmIdx
+  | Var TmName
   | Unit
   | App (Term a) (Term a)
   | Abs (Term a)
@@ -91,7 +104,7 @@ data Term a
 -- zero = TmAbs "f" TyUnit (TmAbs "x" TyUnit (TmVar "x" 0))
 
 zero :: (Term a)
-zero = Abs (Abs (Var 0))
+zero = Abs (Abs (Var (TmI 0)))
 
 synthType :: Term 'Polytype -> Maybe (CType 'Polytype)
 synthType tm =
@@ -99,84 +112,84 @@ synthType tm =
         ScopeState
           { termIdx = 0,
             typeIdx = 0,
-            freeCount = 0
+            freeCount = 0,
+            context = []
           }
-   in evalState (synthType' [] tm) initState
+   in evalState (synthType' tm) initState
 
 -- synthType :: Context -> Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
 -- synthType = synthType'
 
-synthType' :: Context -> Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
-synthType' ctx (Ann tm ty) =
+synthType' :: Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+synthType' (Ann tm ty) =
   do
-    chk <- checkType ctx tm ty
+    chk <- checkType tm ty
     return $ if chk then Just ty else Nothing
-synthType' ctx (Var n) = return $ lookupTypeOfVar ctx n
-synthType' _ Unit = return $ Just TyUnit
-synthType' ctx (App ts tc) =
+synthType' (Var n) = do
+  ctx <- gets context
+  return $ lookupTypeOfVar ctx n
+synthType' Unit = return $ Just TyUnit
+synthType' (App ts tc) =
   do
-    mt <- synthType' ctx ts
+    mt <- synthType' ts
     case mt of
-      Just t -> synthApplyType ctx tc t
+      Just t -> synthApplyType tc t
       Nothing -> return Nothing
+synthType' (Abs tm) =
+  do
+    ctx <- gets context
+    freeCnt <- gets freeCount
+    let alpha = TyN (freeCnt + 1)
+    let beta = TyN (freeCnt + 2)
+    let ctx' = CtxExist beta : CtxExist alpha : CtxMarker alpha : ctx
 
--- -- TODO: FINISH THIS
--- synthType' ctx (Abs tm) =
---   do
---     -- state <- get
---     freeCnt <- gets freeCount
---     let alpha = freeCnt + 1
---     let beta = freeCnt + 2
---     -- let x = CtxVar (freeCnt + 3)
---     let ctx' = CtxExist beta : CtxExist alpha : CtxMarker alpha : ctx
+    modify (\s -> s {freeCount = freeCnt + 2, context = ctx'})
+    chk <- checkType tm (TyExists beta)
+    modify (\s -> s {freeCount = freeCnt, context = ctx})
 
---     modify {freeCount = freeCnt + 2}
---     chk <- checkType ctx' tm (TyExists beta)
---     modify {freeCount = freeCnt}
+    if chk
+      then return $ Just (TyArrow (TyExists alpha) (TyExists beta))
+      else return Nothing
 
---     if chk
---       then return (TyArrow (TyExists alpha) (TyExists beta))
---       else return Nothing
-
---     return Nothing
-synthType' _ _ = return Nothing
-
--- TODO: We can refactor the Context into the state
-synthApplyType :: Context -> Term 'Polytype -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+synthApplyType :: Term 'Polytype -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
 synthApplyType = undefined
 
 -- todo forall/exists
-checkType :: Context -> Term 'Polytype -> CType 'Polytype -> ScopeGen Bool
-checkType ctx (Abs tm) (TyArrow ty1 ty2) =
+checkType :: Term 'Polytype -> CType 'Polytype -> ScopeGen Bool
+checkType (Abs tm) (TyArrow ty1 ty2) =
   do
     tmIdx <- gets termIdx
-    modify (\s -> s {termIdx = tmIdx + 1})
-    ret <- checkType (CtxVar tmIdx ty1 : ctx) (subst 0 (Var tmIdx) tm) ty2
-    modify (\s -> s {termIdx = tmIdx})
+    ctx <- gets context
+    let ctx' = CtxVar (TmI tmIdx) ty1 : ctx
+    modify (\s -> s {termIdx = tmIdx + 1, context = ctx'})
+    ret <- checkType (subst (TmI 0) (Var (TmI tmIdx)) tm) ty2
+    modify (\s -> s {termIdx = tmIdx, context = ctx})
     return ret
-checkType ctx tm (TyForall ty) =
+checkType tm (TyForall ty) =
   do
     tyIdx <- gets typeIdx
-    modify (\s -> s {typeIdx = tyIdx + 1})
-    ret <- checkType (CtxForall tyIdx : ctx) tm (typeSubst 0 (TyVar tyIdx) ty)
-    modify (\s -> s {typeIdx = tyIdx})
+    ctx <- gets context
+    let ctx' = CtxForall (TyI tyIdx) : ctx
+    modify (\s -> s {typeIdx = tyIdx + 1, context = ctx'})
+    ret <- checkType tm (typeSubst (TyI 0) (TyVar (TyI tyIdx)) ty)
+    modify (\s -> s {typeIdx = tyIdx, context = ctx})
     return ret
-checkType _ Unit TyUnit = return True
-checkType ctx tm ty =
+checkType Unit TyUnit = return True
+checkType tm ty =
   do
-    t <- synthType' ctx tm
+    t <- synthType' tm
     return $ case t of
       Just infTy -> infTy == ty
       Nothing -> False
 
-subst :: TmIdx -> Term a -> Term a -> Term a
+subst :: TmName -> Term a -> Term a -> Term a
 subst i tm1 (Ann tm2 ty) = Ann (subst i tm1 tm2) ty
-subst i tm1 (Abs tm2) = Abs (subst (i + 1) tm1 tm2)
+subst i tm1 (Abs tm2) = Abs (subst (addTmName i 1) tm1 tm2)
 subst i tm (Var j) = if i == j then tm else Var j
 subst i tm (App tm1 tm2) = App (subst i tm tm1) (subst i tm tm2)
 subst _ _ Unit = Unit
 
-typeSubst :: TyIdx -> CType a -> CType a -> CType a
+typeSubst :: TyName -> CType a -> CType a -> CType a
 typeSubst i ty' (TyArrow ty1 ty2) = TyArrow (typeSubst i ty' ty1) (typeSubst i ty' ty2)
 typeSubst _ _ TyUnit = TyUnit
 typeSubst i ty' (TyVar n) =
