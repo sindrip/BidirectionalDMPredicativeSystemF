@@ -7,6 +7,7 @@
 module TypeChecker where
 
 import Control.Applicative (Applicative (liftA2))
+import Control.Monad.State
 
 newtype TmIdx = TmIdx Int
   deriving (Show, Eq, Num)
@@ -14,8 +15,22 @@ newtype TmIdx = TmIdx Int
 newtype TyIdx = TyIdx Int
   deriving (Show, Eq, Num)
 
+newtype FreeName = FreeName Int
+  deriving (Show, Eq, Num)
+
 data Indices = Indices TmIdx TyIdx
   deriving (Show, Eq)
+
+-- The state of indices and free names generate
+data ScopeState = ScopeState
+  { termIdx :: TmIdx,
+    typeIdx :: TyIdx,
+    freeCount :: FreeName
+  }
+  deriving (Show, Eq)
+
+-- Type alias for the State monad
+type ScopeGen a = State ScopeState a
 
 data TypeCategory = Monotype | Polytype
   deriving (Show, Eq)
@@ -78,41 +93,81 @@ data Term a
 zero :: (Term a)
 zero = Abs (Abs (Var 0))
 
-synthType :: Context -> Term 'Polytype -> Maybe (CType 'Polytype)
-synthType = synthType' (Indices 0 0)
+synthType :: Term 'Polytype -> Maybe (CType 'Polytype)
+synthType tm =
+  let initState =
+        ScopeState
+          { termIdx = 0,
+            typeIdx = 0,
+            freeCount = 0
+          }
+   in evalState (synthType' [] tm) initState
 
-synthType' :: Indices -> Context -> Term 'Polytype -> Maybe (CType 'Polytype)
-synthType' i ctx (Ann tm ty) =
-  if checkType i ctx tm ty
-    then Just ty
-    else Nothing
-synthType' _ ctx (Var n) = lookupTypeOfVar ctx n
-synthType' _ _ Unit = Just TyUnit
-synthType' i ctx (App ts tc) =
-  case synthType' i ctx ts of
-    Just t -> synthApplyType i ctx tc t
-    _ -> Nothing
+-- synthType :: Context -> Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+-- synthType = synthType'
 
--- synthType' (Indices tmIdx tyIdx) ctx (Abs tm) =
---   let marker = CtxMarker (tyIdx + 1)
---       alpha = CtxExist (tyIdx + 1)
---       beta = CtxExist (tyIdx + 2)
---       x = CtxVar (tmIdx + 1) ()
---    in undefined
+synthType' :: Context -> Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+synthType' ctx (Ann tm ty) =
+  do
+    chk <- checkType ctx tm ty
+    return $ if chk then Just ty else Nothing
+synthType' ctx (Var n) = return $ lookupTypeOfVar ctx n
+synthType' _ Unit = return $ Just TyUnit
+synthType' ctx (App ts tc) =
+  do
+    mt <- synthType' ctx ts
+    case mt of
+      Just t -> synthApplyType ctx tc t
+      Nothing -> return Nothing
 
-synthApplyType :: Indices -> Context -> Term 'Polytype -> CType 'Polytype -> Maybe (CType 'Polytype)
+-- -- TODO: FINISH THIS
+-- synthType' ctx (Abs tm) =
+--   do
+--     -- state <- get
+--     freeCnt <- gets freeCount
+--     let alpha = freeCnt + 1
+--     let beta = freeCnt + 2
+--     -- let x = CtxVar (freeCnt + 3)
+--     let ctx' = CtxExist beta : CtxExist alpha : CtxMarker alpha : ctx
+
+--     modify {freeCount = freeCnt + 2}
+--     chk <- checkType ctx' tm (TyExists beta)
+--     modify {freeCount = freeCnt}
+
+--     if chk
+--       then return (TyArrow (TyExists alpha) (TyExists beta))
+--       else return Nothing
+
+--     return Nothing
+synthType' _ _ = return Nothing
+
+-- TODO: We can refactor the Context into the state
+synthApplyType :: Context -> Term 'Polytype -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
 synthApplyType = undefined
 
 -- todo forall/exists
-checkType :: Indices -> Context -> Term 'Polytype -> CType 'Polytype -> Bool
-checkType (Indices tmIdx tyIdx) ctx (Abs tm) (TyArrow ty1 ty2) =
-  checkType (Indices (tmIdx + 1) tyIdx) (CtxVar tmIdx ty1 : ctx) (subst 0 (Var tmIdx) tm) ty2
-checkType (Indices tmIdx tyIdx) ctx tm (TyForall ty) =
-  checkType (Indices tmIdx (tyIdx + 1)) (CtxForall tyIdx : ctx) tm (typeSubst 0 (TyVar tyIdx) ty)
-checkType _ _ Unit TyUnit = True
-checkType i ctx tm ty = case synthType' i ctx tm of
-  Just infTy -> infTy == ty
-  Nothing -> False
+checkType :: Context -> Term 'Polytype -> CType 'Polytype -> ScopeGen Bool
+checkType ctx (Abs tm) (TyArrow ty1 ty2) =
+  do
+    tmIdx <- gets termIdx
+    modify (\s -> s {termIdx = tmIdx + 1})
+    ret <- checkType (CtxVar tmIdx ty1 : ctx) (subst 0 (Var tmIdx) tm) ty2
+    modify (\s -> s {termIdx = tmIdx})
+    return ret
+checkType ctx tm (TyForall ty) =
+  do
+    tyIdx <- gets typeIdx
+    modify (\s -> s {typeIdx = tyIdx + 1})
+    ret <- checkType (CtxForall tyIdx : ctx) tm (typeSubst 0 (TyVar tyIdx) ty)
+    modify (\s -> s {typeIdx = tyIdx})
+    return ret
+checkType _ Unit TyUnit = return True
+checkType ctx tm ty =
+  do
+    t <- synthType' ctx tm
+    return $ case t of
+      Just infTy -> infTy == ty
+      Nothing -> False
 
 subst :: TmIdx -> Term a -> Term a -> Term a
 subst i tm1 (Ann tm2 ty) = Ann (subst i tm1 tm2) ty
