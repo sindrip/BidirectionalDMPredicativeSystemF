@@ -74,8 +74,8 @@ ctypeToMono (TyExists n) = Just (TyExists n)
 ctypeToMono (TyForall _) = Nothing
 
 data CtxElem
-  = CtxForall TyName
-  | CtxVar TmName (CType 'Polytype)
+  = CtxForall FreeName
+  | CtxVar FreeName (CType 'Polytype)
   | CtxExist FreeName
   | CtxExistSolved FreeName (CType 'Monotype)
   | CtxMarker FreeName
@@ -91,14 +91,14 @@ existentials = go
     go ((CtxExistSolved n _) : xs) = n : go xs
     go (_ : xs) = go xs
 
-foralls :: Context -> [TyName]
+foralls :: Context -> [FreeName]
 foralls = go
   where
     go [] = []
     go ((CtxForall n) : xs) = n : go xs
     go (_ : xs) = go xs
 
-vars :: Context -> [TmName]
+vars :: Context -> [FreeName]
 vars = go
   where
     go [] = []
@@ -122,7 +122,7 @@ lookupSolution (c : cs) n =
         else lookupSolution cs n
     _ -> lookupSolution cs n
 
-lookupTypeOfVar :: Context -> TmName -> Maybe (CType 'Polytype)
+lookupTypeOfVar :: Context -> FreeName -> Maybe (CType 'Polytype)
 lookupTypeOfVar [] _ = Nothing
 lookupTypeOfVar (c : cs) n =
   case c of
@@ -173,13 +173,14 @@ typeWF :: CType a -> ScopeGen Bool
 typeWF ty = do
   ctx <- gets context
   case ty of
-    TyVar n -> return $ n `elem` foralls ctx
+    TyVar (TyN n) -> return $ n `elem` foralls ctx
+    TyVar (TyI _) -> return False
     TyUnit -> return True
     TyArrow a b -> liftA2 (&&) (typeWF a) (typeWF b)
     TyForall a -> do
       freeCnt <- gets freeCount
       let alpha = freeCnt
-      let ctx' = CtxForall (TyN alpha) : ctx
+      let ctx' = CtxForall alpha : ctx
 
       modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
       chk <- typeWF (typeSubst (TyI 0) (TyExists alpha) a)
@@ -254,9 +255,10 @@ synthType' (Ann tm ty) =
   do
     chk <- checkType tm ty
     return $ if chk then Just ty else Nothing
-synthType' (Var n) = do
+synthType' (Var (TmN n)) = do
   ctx <- gets context
   return $ lookupTypeOfVar ctx n
+synthType' (Var (TmI _)) = return Nothing
 synthType' Unit = return $ Just TyUnit
 synthType' (App ts tc) =
   do
@@ -315,21 +317,21 @@ synthApplyType _ _ = return Nothing
 checkType :: Term -> CType 'Polytype -> ScopeGen Bool
 checkType (Abs tm) (TyArrow ty1 ty2) =
   do
-    tmIdx <- gets termIdx
+    freeCnt <- gets freeCount
     ctx <- gets context
-    let ctx' = CtxVar (TmI tmIdx) ty1 : ctx
-    modify (\s -> s {termIdx = tmIdx + 1, context = ctx'})
-    ret <- checkType (subst (TmI 0) (Var (TmI tmIdx)) tm) ty2
-    modify (\s -> s {termIdx = tmIdx, context = ctx})
+    let ctx' = CtxVar freeCnt ty1 : ctx
+    modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
+    ret <- checkType (subst (TmI 0) (Var (TmN freeCnt)) tm) ty2
+    dropMarker (CtxVar freeCnt ty1)
     return ret
 checkType tm (TyForall ty) =
   do
-    tyIdx <- gets typeIdx
+    freeCnt <- gets freeCount
     ctx <- gets context
-    let ctx' = CtxForall (TyI tyIdx) : ctx
-    modify (\s -> s {typeIdx = tyIdx + 1, context = ctx'})
-    ret <- checkType tm (typeSubst (TyI 0) (TyVar (TyI tyIdx)) ty)
-    modify (\s -> s {typeIdx = tyIdx, context = ctx})
+    let ctx' = CtxForall freeCnt : ctx
+    modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
+    ret <- checkType tm (typeSubst (TyI 0) (TyVar (TyN freeCnt)) ty)
+    dropMarker (CtxForall freeCnt)
     return ret
 checkType Unit TyUnit = return True
 -- Apply context as substitution
@@ -358,10 +360,10 @@ subtype ty1 ty2 = do
     (a, TyForall ty) -> do
       ctx' <- gets context
       freeCnt <- gets freeCount
-      let alpha = TyN freeCnt
+      let alpha = freeCnt
       let ctx'' = CtxForall alpha : ctx'
       modify (\s -> s {context = ctx''})
-      st <- subtype a (typeSubst (TyI 0) (TyVar alpha) ty)
+      st <- subtype a (typeSubst (TyI 0) (TyVar (TyN alpha)) ty)
       dropMarker (CtxForall alpha)
       return st
     (TyForall ty, a) -> do
@@ -429,11 +431,11 @@ instantiateL alpha a = do
       TyForall b -> do
         ctx <- gets context
         freeCnt <- gets freeCount
-        let beta' = TyN freeCnt
+        let beta' = freeCnt
         let ctx' = CtxForall beta' : ctx
 
         modify (\s -> s {context = ctx', freeCount = freeCnt + 1})
-        ret <- instantiateL alpha (typeSubst (TyI 0) (TyForall (TyVar beta')) b)
+        ret <- instantiateL alpha (typeSubst (TyI 0) (TyForall (TyVar (TyN beta'))) b)
         dropMarker (CtxForall beta')
 
         return ret
