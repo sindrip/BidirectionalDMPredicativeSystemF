@@ -251,21 +251,27 @@ synthType tm =
 -- synthType = synthType'
 
 synthType' :: Term -> ScopeGen (Maybe (CType 'Polytype))
+-- Anno
 synthType' (Ann tm ty) =
   do
     chk <- checkType tm ty
     return $ if chk then Just ty else Nothing
+-- Var
 synthType' (Var (TmN n)) = do
   ctx <- gets context
   return $ lookupTypeOfVar ctx n
+-- Var (not applicable)
 synthType' (Var (TmI _)) = return Nothing
+-- 1I-synth
 synthType' Unit = return $ Just TyUnit
+-- ->I-Synth
 synthType' (App ts tc) =
   do
     mt <- synthType' ts
     case mt of
       Just t -> synthApplyType tc t
       Nothing -> return Nothing
+-- ->E
 synthType' (Abs tm) =
   do
     ctx <- gets context
@@ -283,6 +289,7 @@ synthType' (Abs tm) =
       else return Nothing
 
 synthApplyType :: Term -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+-- \forall App
 synthApplyType tm (TyForall ty) =
   do
     ctx <- gets context
@@ -295,6 +302,7 @@ synthApplyType tm (TyForall ty) =
     modify (\s -> s {freeCount = freeCnt, context = ctx})
 
     return t
+-- a^App
 synthApplyType tm (TyExists ty) =
   do
     ctx <- gets context
@@ -308,6 +316,7 @@ synthApplyType tm (TyExists ty) =
 
     chk <- checkType tm (TyExists alpha)
     return $ if chk then Just $ TyExists beta else Nothing
+-- ->App
 synthApplyType tm (TyArrow ty1 ty2) =
   do
     chk <- checkType tm ty1
@@ -315,6 +324,7 @@ synthApplyType tm (TyArrow ty1 ty2) =
 synthApplyType _ _ = return Nothing
 
 checkType :: Term -> CType 'Polytype -> ScopeGen Bool
+-- ->I
 checkType (Abs tm) (TyArrow ty1 ty2) =
   do
     freeCnt <- gets freeCount
@@ -324,6 +334,7 @@ checkType (Abs tm) (TyArrow ty1 ty2) =
     ret <- checkType (subst (TmI 0) (Var (TmN freeCnt)) tm) ty2
     dropMarker (CtxVar freeCnt ty1)
     return ret
+-- \forall I
 checkType tm (TyForall ty) =
   do
     freeCnt <- gets freeCount
@@ -333,8 +344,9 @@ checkType tm (TyForall ty) =
     ret <- checkType tm (typeSubst (TyI 0) (TyVar (TyN freeCnt)) ty)
     dropMarker (CtxForall freeCnt)
     return ret
+-- 1I
 checkType Unit TyUnit = return True
--- Apply context as substitution
+-- Sub
 checkType tm ty =
   do
     mt <- synthType' tm
