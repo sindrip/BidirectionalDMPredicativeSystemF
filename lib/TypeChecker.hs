@@ -8,6 +8,7 @@ module TypeChecker where
 
 import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
+import qualified Data.Set as S
 
 newtype TmIdx = TmIdx Int
   deriving (Show, Eq, Num)
@@ -16,7 +17,7 @@ newtype TyIdx = TyIdx Int
   deriving (Show, Eq, Num)
 
 newtype FreeName = FreeName Int
-  deriving (Show, Eq, Num)
+  deriving (Show, Eq, Num, Ord)
 
 data TmName = TmI TmIdx | TmN FreeName
   deriving (Show, Eq)
@@ -131,8 +132,11 @@ lookupTypeOfVar (c : cs) n =
         else lookupTypeOfVar cs n
     _ -> lookupTypeOfVar cs n
 
-dropMarker :: CtxElem -> Context -> Context
-dropMarker m ctx = tail $ dropWhile (/= m) ctx
+dropMarker :: CtxElem -> ScopeGen ()
+dropMarker m = do
+  ctx <- gets context
+  let ctx' = tail $ dropWhile (/= m) ctx
+  modify (\s -> s {context = ctx'})
 
 breakMarker :: CtxElem -> Context -> (Context, Context)
 breakMarker m ctx = let (l, _ : r) = break (== m) ctx in (l, r)
@@ -183,21 +187,33 @@ typeWF ty = do
       return chk
     TyExists n -> return $ n `elem` existentials ctx
 
-apply :: Context -> CType 'Polytype -> CType 'Polytype
-apply gamma ty = case ty of
-  TyUnit -> TyUnit
-  TyVar n -> TyVar n
-  TyForall t -> TyForall (apply gamma t)
-  tye@(TyExists n) ->
-    case lookupSolution gamma n of
-      Just t -> apply gamma (ctypeToPoly t)
-      Nothing -> tye
-  TyArrow ty1 ty2 -> TyArrow (apply gamma ty1) (apply gamma ty2)
+checkCtxWF :: ScopeGen Bool
+checkCtxWF = do ctxWF
 
-comesBefore :: Context -> TyName -> TyName -> Bool
-comesBefore gamma alpha beta =
-  let l = dropMarker (CtxExist beta) gamma
-   in alpha `elem` existentials l
+checkTypeWF :: CType 'Polytype -> ScopeGen Bool
+checkTypeWF = do typeWF
+
+apply :: CType 'Polytype -> ScopeGen (CType 'Polytype)
+apply ty = do
+  ctx <- gets context
+  case ty of
+    TyUnit -> return TyUnit
+    TyVar n -> return $ TyVar n
+    TyForall t -> TyForall <$> apply t
+    tye@(TyExists n) ->
+      case lookupSolution ctx n of
+        Just t -> apply (ctypeToPoly t)
+        Nothing -> return tye
+    TyArrow ty1 ty2 -> liftA2 TyArrow (apply ty1) (apply ty2)
+
+comesBefore :: TyName -> TyName -> ScopeGen Bool
+comesBefore alpha beta = do
+  ctx <- gets context
+  dropMarker (CtxExist beta)
+  ctx' <- gets context
+  let ret = alpha `elem` existentials ctx'
+  modify (\s -> s {context = ctx})
+  return ret
 
 data Term a
   = Ann (Term a) (CType a)
@@ -319,7 +335,63 @@ checkType tm ty =
       Nothing -> return False
 
 subtype :: CType a -> CType a -> ScopeGen Bool
-subtype = undefined
+subtype ty1 ty2 = do
+  ctx <- gets context
+  wf1 <- checkTypeWF (ctypeToPoly ty1)
+  wf2 <- checkTypeWF (ctypeToPoly ty2)
+  st <- case (ty1, ty2) of
+    (TyVar n, TyVar n') -> return $ n == n'
+    (TyUnit, TyUnit) -> return True
+    (TyExists n, TyExists n') -> return $ n == n' && n `elem` existentials ctx
+    (TyArrow a1 a2, TyArrow b1 b2) -> do
+      ctx' <- gets context
+      st1 <- subtype b1 a1
+      st2 <- subtype <$> apply (ctypeToPoly a2) <*> apply (ctypeToPoly b2)
+      modify (\s -> s {context = ctx'})
+      (&&) st1 <$> st2
+    (a, TyForall ty) -> do
+      ctx' <- gets context
+      freeCnt <- gets freeCount
+      let alpha = TyN freeCnt
+      let ctx'' = CtxForall alpha : ctx'
+      modify (\s -> s {context = ctx''})
+      st <- subtype a (typeSubst (TyI 0) (TyVar alpha) ty)
+      dropMarker (CtxForall alpha)
+      return st
+    (TyForall ty, a) -> do
+      ctx' <- gets context
+      freeCnt <- gets freeCount
+      let alpha = TyN freeCnt
+      let ctx'' = CtxExist alpha : CtxMarker alpha : ctx'
+      modify (\s -> s {context = ctx''})
+      st <- subtype (typeSubst (TyI 0) (TyVar alpha) ty) a
+      dropMarker (CtxMarker alpha)
+      return st
+    (TyExists n, a) -> do
+      ctx' <- gets context
+      (&&)
+        ( (n `elem` existentials ctx')
+            && tempFreeNameShit n `notElem` freeTyVars a
+        )
+        <$> instantiateL n (ctypeToPoly a)
+    (a, TyExists n) -> do
+      ctx' <- gets context
+      (&&)
+        ( (n `elem` existentials ctx')
+            && tempFreeNameShit n `notElem` freeTyVars a
+        )
+        <$> instantiateR (ctypeToPoly a) n
+    _ -> return False
+  return $ wf1 && wf2 && st
+
+tempFreeNameShit :: TyName -> FreeName
+tempFreeNameShit (TyN f) = f
+
+instantiateL :: TyName -> CType 'Polytype -> ScopeGen Bool
+instantiateL = undefined
+
+instantiateR :: CType 'Polytype -> TyName -> ScopeGen Bool
+instantiateR = undefined
 
 subst :: TmName -> Term a -> Term a -> Term a
 subst i tm1 (Ann tm2 ty) = Ann (subst i tm1 tm2) ty
@@ -344,3 +416,13 @@ typeSubst i ty' (TyForall ty1) =
     (TyI 0) -> TyForall ty1
     (TyI n) -> TyForall (typeSubst (TyI (n -1)) ty' ty1)
     _ -> TyForall (typeSubst i ty' ty1)
+
+freeTyVars :: CType a -> S.Set FreeName
+freeTyVars ty = case ty of
+  TyUnit -> S.empty
+  TyVar (TyN n) -> S.singleton n
+  TyVar (TyI _) -> S.empty
+  TyForall t -> freeTyVars t
+  TyExists (TyN n) -> S.singleton n
+  TyExists (TyI _) -> S.empty
+  TyArrow ty1 ty2 -> S.union (freeTyVars ty1) (freeTyVars ty2)

@@ -67,6 +67,7 @@ library
                      , parser-combinators
                      , text
                      , mtl
+                     , containers
 
   -- Directories containing source files.
   hs-source-dirs:      lib
