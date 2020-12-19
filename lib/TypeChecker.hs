@@ -8,7 +8,6 @@ module TypeChecker where
 
 import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
-import Data.Maybe (fromJust)
 import qualified Data.Set as S
 
 newtype TmIdx = TmIdx Int
@@ -53,7 +52,7 @@ data CType :: TypeCategory -> * where
   TyArrow :: CType a -> CType a -> CType a
   TyUnit :: CType a
   TyVar :: TyName -> CType a
-  TyExists :: TyName -> CType a
+  TyExists :: FreeName -> CType a
   TyForall :: CType 'Polytype -> CType 'Polytype
 
 deriving instance Show (CType a)
@@ -77,14 +76,14 @@ ctypeToMono (TyForall _) = Nothing
 data CtxElem
   = CtxForall TyName
   | CtxVar TmName (CType 'Polytype)
-  | CtxExist TyName
-  | CtxExistSolved TyName (CType 'Monotype)
-  | CtxMarker TyName
+  | CtxExist FreeName
+  | CtxExistSolved FreeName (CType 'Monotype)
+  | CtxMarker FreeName
   deriving (Show, Eq)
 
 type Context = [CtxElem]
 
-existentials :: Context -> [TyName]
+existentials :: Context -> [FreeName]
 existentials = go
   where
     go [] = []
@@ -106,14 +105,14 @@ vars = go
     go ((CtxVar n _) : xs) = n : go xs
     go (_ : xs) = go xs
 
-markers :: Context -> [TyName]
+markers :: Context -> [FreeName]
 markers = go
   where
     go [] = []
     go ((CtxMarker n) : xs) = n : go xs
     go (_ : xs) = go xs
 
-lookupSolution :: Context -> TyName -> Maybe (CType 'Monotype)
+lookupSolution :: Context -> FreeName -> Maybe (CType 'Monotype)
 lookupSolution [] _ = Nothing
 lookupSolution (c : cs) n =
   case c of
@@ -179,8 +178,8 @@ typeWF ty = do
     TyArrow a b -> liftA2 (&&) (typeWF a) (typeWF b)
     TyForall a -> do
       freeCnt <- gets freeCount
-      let alpha = TyN freeCnt
-      let ctx' = CtxForall alpha : ctx
+      let alpha = freeCnt
+      let ctx' = CtxForall (TyN alpha) : ctx
 
       modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
       chk <- typeWF (typeSubst (TyI 0) (TyExists alpha) a)
@@ -207,7 +206,7 @@ apply ty = do
         Nothing -> return tye
     TyArrow ty1 ty2 -> liftA2 TyArrow (apply ty1) (apply ty2)
 
-comesBefore :: TyName -> TyName -> ScopeGen Bool
+comesBefore :: FreeName -> FreeName -> ScopeGen Bool
 comesBefore alpha beta = do
   ctx <- gets context
   dropMarker (CtxExist beta)
@@ -269,8 +268,8 @@ synthType' (Abs tm) =
   do
     ctx <- gets context
     freeCnt <- gets freeCount
-    let alpha = TyN freeCnt
-    let beta = TyN (freeCnt + 1)
+    let alpha = freeCnt
+    let beta = freeCnt + 1
     let ctx' = CtxExist beta : CtxExist alpha : CtxMarker alpha : ctx
 
     modify (\s -> s {freeCount = freeCnt + 2, context = ctx'})
@@ -286,7 +285,7 @@ synthApplyType tm (TyForall ty) =
   do
     ctx <- gets context
     freeCnt <- gets freeCount
-    let alpha = TyN freeCnt
+    let alpha = freeCnt
     let ctx' = CtxExist alpha : ctx
 
     modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
@@ -298,8 +297,8 @@ synthApplyType tm (TyExists ty) =
   do
     ctx <- gets context
     freeCnt <- gets freeCount
-    let alpha = TyN freeCnt
-    let beta = TyN (freeCnt + 1)
+    let alpha = freeCnt
+    let beta = freeCnt + 1
     let ctxToAdd = [CtxExistSolved ty (TyArrow (TyExists alpha) (TyExists beta)), CtxExist alpha, CtxExist beta]
     let ctx' = replaceCtxExistWith ctx (CtxExist ty) ctxToAdd
 
@@ -368,33 +367,30 @@ subtype ty1 ty2 = do
     (TyForall ty, a) -> do
       ctx' <- gets context
       freeCnt <- gets freeCount
-      let alpha = TyN freeCnt
+      let alpha = freeCnt
       let ctx'' = CtxExist alpha : CtxMarker alpha : ctx'
       modify (\s -> s {context = ctx''})
-      st <- subtype (typeSubst (TyI 0) (TyVar alpha) ty) a
+      st <- subtype (typeSubst (TyI 0) (TyVar (TyN alpha)) ty) a
       dropMarker (CtxMarker alpha)
       return st
     (TyExists n, a) -> do
       ctx' <- gets context
       (&&)
         ( (n `elem` existentials ctx')
-            && tempFreeNameShit n `notElem` freeTyVars a
+            && n `notElem` freeTyVars a
         )
         <$> instantiateL n (ctypeToPoly a)
     (a, TyExists n) -> do
       ctx' <- gets context
       (&&)
         ( (n `elem` existentials ctx')
-            && tempFreeNameShit n `notElem` freeTyVars a
+            && n `notElem` freeTyVars a
         )
         <$> instantiateR (ctypeToPoly a) n
     _ -> return False
   return $ wf1 && wf2 && st
 
-tempFreeNameShit :: TyName -> FreeName
-tempFreeNameShit (TyN f) = f
-
-solve :: TyName -> CType a -> ScopeGen Bool
+solve :: FreeName -> CType a -> ScopeGen Bool
 solve alpha a = case ctypeToMono a of
   Just t -> do
     ctx <- gets context
@@ -404,7 +400,7 @@ solve alpha a = case ctypeToMono a of
     return True
   Nothing -> return False
 
-instantiateL :: TyName -> CType 'Polytype -> ScopeGen Bool
+instantiateL :: FreeName -> CType 'Polytype -> ScopeGen Bool
 instantiateL alpha a = do
   wf1 <- checkTypeWF (ctypeToPoly a)
   wf2 <- checkTypeWF (ctypeToPoly (TyExists alpha))
@@ -420,8 +416,8 @@ instantiateL alpha a = do
       TyArrow a1 a2 -> do
         ctx <- gets context
         freeCnt <- gets freeCount
-        let alpha1 = TyN freeCnt
-        let alpha2 = TyN (freeCnt + 1)
+        let alpha1 = freeCnt
+        let alpha2 = freeCnt + 1
         let ctxToAdd =
               [ CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2)),
                 CtxExist alpha1,
@@ -443,7 +439,7 @@ instantiateL alpha a = do
         return ret
       _ -> return False
 
-instantiateR :: CType 'Polytype -> TyName -> ScopeGen Bool
+instantiateR :: CType 'Polytype -> FreeName -> ScopeGen Bool
 instantiateR a alpha = do
   wf1 <- checkTypeWF (ctypeToPoly a)
   wf2 <- checkTypeWF (ctypeToPoly (TyExists alpha))
@@ -459,8 +455,8 @@ instantiateR a alpha = do
       TyArrow a1 a2 -> do
         ctx <- gets context
         freeCnt <- gets freeCount
-        let alpha1 = TyN freeCnt
-        let alpha2 = TyN (freeCnt + 1)
+        let alpha1 = freeCnt
+        let alpha2 = freeCnt + 1
         let ctxToAdd =
               [ CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2)),
                 CtxExist alpha1,
@@ -472,7 +468,7 @@ instantiateR a alpha = do
       TyForall b -> do
         ctx <- gets context
         freeCnt <- gets freeCount
-        let beta' = TyN freeCnt
+        let beta' = freeCnt
         let ctx' = CtxExist beta' : CtxMarker beta' : ctx
 
         modify (\s -> s {context = ctx', freeCount = freeCnt + 1})
@@ -497,7 +493,7 @@ typeSubst i ty' (TyVar n) =
     then ty'
     else TyVar n
 typeSubst i ty' (TyExists n) =
-  if i == n
+  if i == TyN n
     then ty'
     else TyExists n
 typeSubst i ty' (TyForall ty1) =
@@ -512,6 +508,5 @@ freeTyVars ty = case ty of
   TyVar (TyN n) -> S.singleton n
   TyVar (TyI _) -> S.empty
   TyForall t -> freeTyVars t
-  TyExists (TyN n) -> S.singleton n
-  TyExists (TyI _) -> S.empty
+  TyExists n -> S.singleton n
   TyArrow ty1 ty2 -> S.union (freeTyVars ty1) (freeTyVars ty2)
