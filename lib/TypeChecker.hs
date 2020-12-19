@@ -247,9 +247,6 @@ synthType tm =
           }
    in evalState (synthType' tm) initState
 
--- synthType :: Context -> Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
--- synthType = synthType'
-
 synthType' :: Term -> ScopeGen (Maybe (CType 'Polytype))
 -- Anno
 synthType' (Ann tm ty) =
@@ -264,14 +261,14 @@ synthType' (Var (TmN n)) = do
 synthType' (Var (TmI _)) = return Nothing
 -- 1I-synth
 synthType' Unit = return $ Just TyUnit
--- ->I-Synth
+-- →I-Synth
 synthType' (App ts tc) =
   do
     mt <- synthType' ts
     case mt of
       Just t -> synthApplyType tc t
       Nothing -> return Nothing
--- ->E
+-- →E
 synthType' (Abs tm) =
   do
     ctx <- gets context
@@ -289,7 +286,7 @@ synthType' (Abs tm) =
       else return Nothing
 
 synthApplyType :: Term -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
--- \forall App
+-- ∀App
 synthApplyType tm (TyForall ty) =
   do
     ctx <- gets context
@@ -302,7 +299,7 @@ synthApplyType tm (TyForall ty) =
     modify (\s -> s {freeCount = freeCnt, context = ctx})
 
     return t
--- a^App
+-- âApp
 synthApplyType tm (TyExists ty) =
   do
     ctx <- gets context
@@ -316,7 +313,7 @@ synthApplyType tm (TyExists ty) =
 
     chk <- checkType tm (TyExists alpha)
     return $ if chk then Just $ TyExists beta else Nothing
--- ->App
+-- →App
 synthApplyType tm (TyArrow ty1 ty2) =
   do
     chk <- checkType tm ty1
@@ -324,7 +321,7 @@ synthApplyType tm (TyArrow ty1 ty2) =
 synthApplyType _ _ = return Nothing
 
 checkType :: Term -> CType 'Polytype -> ScopeGen Bool
--- ->I
+-- →I
 checkType (Abs tm) (TyArrow ty1 ty2) =
   do
     freeCnt <- gets freeCount
@@ -334,7 +331,7 @@ checkType (Abs tm) (TyArrow ty1 ty2) =
     ret <- checkType (subst (TmI 0) (Var (TmN freeCnt)) tm) ty2
     dropMarker (CtxVar freeCnt ty1)
     return ret
--- \forall I
+-- ∀I
 checkType tm (TyForall ty) =
   do
     freeCnt <- gets freeCount
@@ -360,15 +357,20 @@ subtype ty1 ty2 = do
   wf1 <- checkTypeWF (ctypeToPoly ty1)
   wf2 <- checkTypeWF (ctypeToPoly ty2)
   st <- case (ty1, ty2) of
+    -- <:Var
     (TyVar n, TyVar n') -> return $ n == n'
+    -- <:Unit
     (TyUnit, TyUnit) -> return True
+    -- <:ExVar
     (TyExists n, TyExists n') -> return $ n == n' && n `elem` existentials ctx
+    -- <:→
     (TyArrow a1 a2, TyArrow b1 b2) -> do
       ctx' <- gets context
       st1 <- subtype b1 a1
       st2 <- subtype <$> apply (ctypeToPoly a2) <*> apply (ctypeToPoly b2)
       modify (\s -> s {context = ctx'})
       (&&) st1 <$> st2
+    -- <:∀R
     (a, TyForall ty) -> do
       ctx' <- gets context
       freeCnt <- gets freeCount
@@ -378,6 +380,7 @@ subtype ty1 ty2 = do
       st <- subtype a (typeSubst (TyI 0) (TyVar (TyN alpha)) ty)
       dropMarker (CtxForall alpha)
       return st
+    -- <:∀L
     (TyForall ty, a) -> do
       ctx' <- gets context
       freeCnt <- gets freeCount
@@ -387,6 +390,7 @@ subtype ty1 ty2 = do
       st <- subtype (typeSubst (TyI 0) (TyVar (TyN alpha)) ty) a
       dropMarker (CtxMarker alpha)
       return st
+    -- <:InstantiateL
     (TyExists n, a) -> do
       ctx' <- gets context
       (&&)
@@ -394,6 +398,7 @@ subtype ty1 ty2 = do
             && n `notElem` freeTyVars a
         )
         <$> instantiateL n (ctypeToPoly a)
+    -- <:InstantiateR
     (a, TyExists n) -> do
       ctx' <- gets context
       (&&)
