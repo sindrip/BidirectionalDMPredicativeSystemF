@@ -8,6 +8,7 @@ module TypeChecker where
 
 import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
+import Data.Maybe (fromJust)
 import qualified Data.Set as S
 
 newtype TmIdx = TmIdx Int
@@ -215,21 +216,27 @@ comesBefore alpha beta = do
   modify (\s -> s {context = ctx})
   return ret
 
-data Term a
-  = Ann (Term a) (CType a)
+data Term
+  = Ann Term (CType 'Polytype)
   | Var TmName
   | Unit
-  | App (Term a) (Term a)
-  | Abs (Term a)
+  | App Term Term
+  | Abs Term
   deriving (Show, Eq)
 
--- zero :: Term
--- zero = TmAbs "f" TyUnit (TmAbs "x" TyUnit (TmVar "x" 0))
-
-zero :: (Term a)
+zero :: Term
 zero = Abs (Abs (Var (TmI 0)))
 
-synthType :: Term 'Polytype -> Maybe (CType 'Polytype)
+eid :: Term
+eid = Ann (Abs (Var (TmI 0))) (TyForall (TyArrow (TyVar (TyI 0)) (TyVar (TyI 0))))
+
+eidFail :: Term
+eidFail = Ann (Abs (Var (TmI 0))) (TyForall (TyArrow (TyVar (TyI 0)) TyUnit))
+
+eidFail2 :: Term
+eidFail2 = Ann (Abs (Var (TmI 0))) (TyForall (TyArrow (TyVar (TyI 1)) (TyVar (TyI 0))))
+
+synthType :: Term -> Maybe (CType 'Polytype)
 synthType tm =
   let initState =
         ScopeState
@@ -243,7 +250,7 @@ synthType tm =
 -- synthType :: Context -> Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
 -- synthType = synthType'
 
-synthType' :: Term 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+synthType' :: Term -> ScopeGen (Maybe (CType 'Polytype))
 synthType' (Ann tm ty) =
   do
     chk <- checkType tm ty
@@ -274,7 +281,7 @@ synthType' (Abs tm) =
       then return $ Just (TyArrow (TyExists alpha) (TyExists beta))
       else return Nothing
 
-synthApplyType :: Term 'Polytype -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+synthApplyType :: Term -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
 synthApplyType tm (TyForall ty) =
   do
     ctx <- gets context
@@ -306,7 +313,7 @@ synthApplyType tm (TyArrow ty1 ty2) =
     return $ if chk then Just ty2 else Nothing
 synthApplyType _ _ = return Nothing
 
-checkType :: Term 'Polytype -> CType 'Polytype -> ScopeGen Bool
+checkType :: Term -> CType 'Polytype -> ScopeGen Bool
 checkType (Abs tm) (TyArrow ty1 ty2) =
   do
     tmIdx <- gets termIdx
@@ -387,13 +394,95 @@ subtype ty1 ty2 = do
 tempFreeNameShit :: TyName -> FreeName
 tempFreeNameShit (TyN f) = f
 
+solve :: TyName -> CType a -> ScopeGen Bool
+solve alpha a = case ctypeToMono a of
+  Just t -> do
+    ctx <- gets context
+    let ctxToAdd = [CtxExistSolved alpha t]
+    let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
+    modify (\s -> s {context = ctx'})
+    return True
+  Nothing -> return False
+
 instantiateL :: TyName -> CType 'Polytype -> ScopeGen Bool
-instantiateL = undefined
+instantiateL alpha a = do
+  wf1 <- checkTypeWF (ctypeToPoly a)
+  wf2 <- checkTypeWF (ctypeToPoly (TyExists alpha))
+  solvedA <- solve alpha a
+  if solvedA
+    then return $ wf1 && wf2
+    else case a of
+      TyExists beta -> do
+        aBefore <- comesBefore alpha beta
+        if aBefore
+          then solve beta (TyExists alpha)
+          else solve alpha (TyExists beta)
+      TyArrow a1 a2 -> do
+        ctx <- gets context
+        freeCnt <- gets freeCount
+        let alpha1 = TyN freeCnt
+        let alpha2 = TyN (freeCnt + 1)
+        let ctxToAdd =
+              [ CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2)),
+                CtxExist alpha1,
+                CtxExist alpha2
+              ]
+        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
+        modify (\s -> s {context = ctx', freeCount = freeCnt + 2})
+        liftA2 (&&) (instantiateR a1 alpha1) (apply a2 >>= instantiateL alpha2)
+      TyForall b -> do
+        ctx <- gets context
+        freeCnt <- gets freeCount
+        let beta' = TyN freeCnt
+        let ctx' = CtxForall beta' : ctx
+
+        modify (\s -> s {context = ctx', freeCount = freeCnt + 1})
+        ret <- instantiateL alpha (typeSubst (TyI 0) (TyForall (TyVar beta')) b)
+        dropMarker (CtxForall beta')
+
+        return ret
+      _ -> return False
 
 instantiateR :: CType 'Polytype -> TyName -> ScopeGen Bool
-instantiateR = undefined
+instantiateR a alpha = do
+  wf1 <- checkTypeWF (ctypeToPoly a)
+  wf2 <- checkTypeWF (ctypeToPoly (TyExists alpha))
+  solvedA <- solve alpha a
+  if solvedA
+    then return $ wf1 && wf2
+    else case a of
+      TyExists beta -> do
+        aBefore <- comesBefore alpha beta
+        if aBefore
+          then solve beta (TyExists alpha)
+          else solve alpha (TyExists beta)
+      TyArrow a1 a2 -> do
+        ctx <- gets context
+        freeCnt <- gets freeCount
+        let alpha1 = TyN freeCnt
+        let alpha2 = TyN (freeCnt + 1)
+        let ctxToAdd =
+              [ CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2)),
+                CtxExist alpha1,
+                CtxExist alpha2
+              ]
+        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
+        modify (\s -> s {context = ctx', freeCount = freeCnt + 2})
+        liftA2 (&&) (instantiateL alpha1 a1) (apply a2 >>= flip instantiateR alpha2)
+      TyForall b -> do
+        ctx <- gets context
+        freeCnt <- gets freeCount
+        let beta' = TyN freeCnt
+        let ctx' = CtxExist beta' : CtxMarker beta' : ctx
 
-subst :: TmName -> Term a -> Term a -> Term a
+        modify (\s -> s {context = ctx', freeCount = freeCnt + 1})
+        ret <- instantiateL alpha (typeSubst (TyI 0) (TyExists beta') b)
+        dropMarker (CtxMarker beta')
+
+        return ret
+      _ -> return False
+
+subst :: TmName -> Term -> Term -> Term
 subst i tm1 (Ann tm2 ty) = Ann (subst i tm1 tm2) ty
 subst i tm1 (Abs tm2) = Abs (subst (addTmName i 1) tm1 tm2)
 subst i tm (Var j) = if i == j then tm else Var j
