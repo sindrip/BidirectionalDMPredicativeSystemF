@@ -62,7 +62,7 @@ synthType' (Abs tm) = do
   if chk
     then do
       ctx <- gets context
-      let (delta', delta) = breakMarker marker ctx
+      let (delta, delta') = breakMarker marker ctx
       modify (\s -> s {context = delta'})
       tau <- apply (TyArrow (TyExists alpha) (TyExists beta))
       let unsolved = unsolvedExi delta'

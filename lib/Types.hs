@@ -107,11 +107,11 @@ type Context = [CtxElem]
 replaceCtxExistWith :: Context -> CtxElem -> Context -> Context
 replaceCtxExistWith ctx e toInsert =
   let (l, r) = breakMarker e ctx
-   in l ++ toInsert ++ r
+   in r ++ toInsert ++ l
 
 -- Find a context element, drop it and split the context on it
 breakMarker :: CtxElem -> Context -> (Context, Context)
-breakMarker m ctx = let (l, _ : r) = break (== m) ctx in (l, r)
+breakMarker m ctx = let (l, _ : r) = break (== m) ctx in (r, l)
 
 data ScopeState = ScopeState
   { termIdx :: TmIdx,
