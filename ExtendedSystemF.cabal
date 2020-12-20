@@ -50,8 +50,12 @@ executable ExtendedSystemF
 
 test-suite ExtendedSystemF-test
   default-language:    Haskell2010
-  type:                exitcode-stdio-1.0
+  type:                detailed-0.9
   hs-source-dirs:      test
-  main-is:             MyLibTest.hs
+  test-module:         TestRunner
   build-depends:       base ^>=4.13.0.0
+                     , ExtendedSystemF
+                     , QuickCheck
+                     , Cabal
+                     , cabal-test-quickcheck
 
