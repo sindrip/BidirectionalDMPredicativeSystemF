@@ -21,6 +21,8 @@ library
   -- ghc-options: -Wall -Werror
   ghc-options: -Wall
   exposed-modules:     TypeChecker
+                     , Types
+                     , Subtype
   -- Modules included in this library but not exported.
   -- other-modules:
   -- LANGUAGE extensions used by modules in this package.
