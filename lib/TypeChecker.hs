@@ -69,7 +69,7 @@ synthType' (Abs tm) = do
       let t = foldr addForall tau unsolved
       modify (\s -> s {context = delta})
       return $ Just t
-    else trace "  False" (return Nothing)
+    else return Nothing
 
 -- →I-Synth (Original rule)
 -- synthType' (Abs tm) =
