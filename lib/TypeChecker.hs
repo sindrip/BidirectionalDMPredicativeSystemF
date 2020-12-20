@@ -164,10 +164,9 @@ addForall name t = TyForall (go 0 name t)
     go :: Int -> FreeName -> CType 'Polytype -> CType 'Polytype
     go i n (TyArrow ty1 ty2) = TyArrow (go i n ty1) (go i n ty2)
     go _ _ TyUnit = TyUnit
-    go _ _ (TyVar (TyI tyi)) = TyVar (TyI (tyi + 1))
     go _ _ tv@(TyVar _) = tv
     go i n te@(TyExists ty) =
       if ty == n
         then TyVar (TyI (TyIdx i))
         else te
-    go i n (TyForall ty) = go (i + 1) n ty
+    go i n (TyForall ty) = TyForall (go (i + 1) n ty)
