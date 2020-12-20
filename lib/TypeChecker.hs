@@ -42,25 +42,23 @@ synthType' (Var (TmN n)) = do
 synthType' (Var (TmI _)) = return Nothing
 -- 1I-synth
 synthType' Unit = return $ Just TyUnit
--- →I-Synth
+-- →E
 synthType' (App ts tc) =
   do
     mt <- synthType' ts
     case mt of
       Just t -> synthApplyType tc t
       Nothing -> return Nothing
--- →E
+-- →I-Synth
 synthType' (Abs tm) =
   do
-    ctx <- gets context
-    freeCnt <- gets freeCount
-    let alpha = freeCnt
-    let beta = freeCnt + 1
-    let ctx' = CtxExist beta : CtxExist alpha : CtxMarker alpha : ctx
+    (alpha, e1) <- newFree CtxExist
+    (beta, e2) <- newFree CtxExist
+    (x, e3) <- newFree $ flip CtxVar (TyExists alpha)
+    appendToCtx [e1, e2, e3]
 
-    modify (\s -> s {freeCount = freeCnt + 2, context = ctx'})
-    chk <- checkType tm (TyExists beta)
-    modify (\s -> s {freeCount = freeCnt, context = ctx})
+    chk <- checkType (subst (TmI 0) (Var (TmN x)) tm) (TyExists beta)
+    dropMarker e3
 
     if chk
       then return $ Just (TyArrow (TyExists alpha) (TyExists beta))
@@ -70,27 +68,19 @@ synthApplyType :: Term -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
 -- ∀App
 synthApplyType tm (TyForall ty) =
   do
-    ctx <- gets context
-    freeCnt <- gets freeCount
-    let alpha = freeCnt
-    let ctx' = CtxExist alpha : ctx
-
-    modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
-    t <- synthApplyType tm (typeSubst (TyI 0) (TyExists alpha) ty)
-    modify (\s -> s {freeCount = freeCnt, context = ctx})
-
-    return t
+    (alpha', _) <- addNewToCtx CtxExist
+    synthApplyType tm (typeSubst (TyI 0) (TyExists alpha') ty)
 -- âApp
 synthApplyType tm (TyExists ty) =
   do
-    ctx <- gets context
-    freeCnt <- gets freeCount
-    let alpha = freeCnt
-    let beta = freeCnt + 1
-    let ctxToAdd = [CtxExistSolved ty (TyArrow (TyExists alpha) (TyExists beta)), CtxExist alpha, CtxExist beta]
-    let ctx' = replaceCtxExistWith ctx (CtxExist ty) ctxToAdd
+    (beta, e1) <- newFree CtxExist
+    (alpha, e2) <- newFree CtxExist
+    let solved = CtxExistSolved ty (TyArrow (TyExists alpha) (TyExists beta))
+    let ctxToAdd = [e1, e2, solved]
 
-    modify (\s -> s {freeCount = freeCnt + 2, context = ctx'})
+    ctx <- gets context
+    let ctx' = replaceCtxExistWith ctx (CtxExist ty) ctxToAdd
+    modify (\s -> s {context = ctx'})
 
     chk <- checkType tm (TyExists alpha)
     return $ if chk then Just $ TyExists beta else Nothing
@@ -105,22 +95,16 @@ checkType :: Term -> CType 'Polytype -> ScopeGen Bool
 -- →I
 checkType (Abs tm) (TyArrow ty1 ty2) =
   do
-    freeCnt <- gets freeCount
-    ctx <- gets context
-    let ctx' = CtxVar freeCnt ty1 : ctx
-    modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
-    ret <- checkType (subst (TmI 0) (Var (TmN freeCnt)) tm) ty2
-    dropMarker (CtxVar freeCnt ty1)
+    (x, m) <- addNewToCtx $ flip CtxVar ty1
+    ret <- checkType (subst (TmI 0) (Var (TmN x)) tm) ty2
+    dropMarker m
     return ret
 -- ∀I
 checkType tm (TyForall ty) =
   do
-    freeCnt <- gets freeCount
-    ctx <- gets context
-    let ctx' = CtxForall freeCnt : ctx
-    modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
-    ret <- checkType tm (typeSubst (TyI 0) (TyVar (TyN freeCnt)) ty)
-    dropMarker (CtxForall freeCnt)
+    (alpha, m) <- addNewToCtx CtxForall
+    ret <- checkType tm (typeSubst (TyI 0) (TyVar (TyN alpha)) ty)
+    dropMarker m
     return ret
 -- 1I
 checkType Unit TyUnit = return True
@@ -131,3 +115,23 @@ checkType tm ty =
     case mt of
       Just t -> subtype t ty
       Nothing -> return False
+
+appendToCtx :: [CtxElem] -> ScopeGen ()
+appendToCtx xs = do
+  ctx <- gets context
+  let ctx' = reverse xs ++ ctx
+  modify (\s -> s {context = ctx'})
+  return ()
+
+addNewToCtx :: (FreeName -> CtxElem) -> ScopeGen (FreeName, CtxElem)
+addNewToCtx f = do
+  (freeCnt, element) <- newFree f
+  appendToCtx [element]
+  return (freeCnt, element)
+
+newFree :: (FreeName -> CtxElem) -> ScopeGen (FreeName, CtxElem)
+newFree f = do
+  freeCnt <- gets freeCount
+  let element = f freeCnt
+  modify (\s -> s {freeCount = freeCnt + 1})
+  return (freeCnt, element)
