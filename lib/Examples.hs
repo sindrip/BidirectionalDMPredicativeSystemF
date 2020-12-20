@@ -3,7 +3,7 @@ module Examples where
 import Types
 
 zero :: Term
-zero = Abs (Abs (Var (TmI 0)))
+zero = Abs (Abs (Ann (Var (TmI 0)) TyUnit))
 
 eid :: Term
 eid = Ann (Abs (Var (TmI 0))) (TyForall (TyArrow (TyVar (TyI 0)) (TyVar (TyI 0))))
