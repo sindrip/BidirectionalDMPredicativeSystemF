@@ -67,6 +67,13 @@ existentials = go
     go ((CtxExistSolved n _) : xs) = n : go xs
     go (_ : xs) = go xs
 
+unsolvedExi :: Context -> [FreeName]
+unsolvedExi = go
+  where
+    go [] = []
+    go ((CtxExist n) : xs) = n : go xs
+    go (_ : xs) = go xs
+
 foralls :: Context -> [FreeName]
 foralls = go
   where

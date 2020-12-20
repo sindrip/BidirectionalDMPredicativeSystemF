@@ -4,7 +4,7 @@
 module TypeChecker where
 
 import Control.Monad.State
-import Subtype (subtype)
+import Subtype (apply, subtype, unsolvedExi)
 import Types
 
 lookupTypeOfVar :: Context -> FreeName -> Maybe (CType 'Polytype)
@@ -49,20 +49,42 @@ synthType' (App ts tc) =
     case mt of
       Just t -> synthApplyType tc t
       Nothing -> return Nothing
--- →I-Synth
-synthType' (Abs tm) =
-  do
-    (alpha, e1) <- newFree CtxExist
-    (beta, e2) <- newFree CtxExist
-    (x, e3) <- newFree $ flip CtxVar (TyExists alpha)
-    appendToCtx [e1, e2, e3]
 
-    chk <- checkType (subst (TmI 0) (Var (TmN x)) tm) (TyExists beta)
-    dropMarker e3
+-- →I-Synth (Damas-Milner)
+synthType' (Abs tm) = do
+  (alpha, e1) <- newFree CtxExist
+  (beta, e2) <- newFree CtxExist
+  (x, e3) <- newFree $ flip CtxVar (TyExists alpha)
+  let marker = CtxMarker alpha
+  appendToCtx [marker, e1, e2, e3]
+  chk <- checkType (subst (TmI 0) (Var (TmN x)) tm) (TyExists beta)
 
-    if chk
-      then return $ Just (TyArrow (TyExists alpha) (TyExists beta))
-      else return Nothing
+  if chk
+    then do
+      ctx <- gets context
+      let (delta', delta) = breakMarker marker ctx
+      modify (\s -> s {context = delta'})
+      tau <- apply (TyArrow (TyExists alpha) (TyExists beta))
+      let unsolved = unsolvedExi delta'
+      let t = foldr addForall tau unsolved
+      modify (\s -> s {context = delta})
+      return $ Just t
+    else trace "  False" (return Nothing)
+
+-- →I-Synth (Original rule)
+-- synthType' (Abs tm) =
+--   do
+--     (alpha, e1) <- newFree CtxExist
+--     (beta, e2) <- newFree CtxExist
+--     (x, e3) <- newFree $ flip CtxVar (TyExists alpha)
+--     appendToCtx [e1, e2, e3]
+
+--     chk <- checkType (subst (TmI 0) (Var (TmN x)) tm) (TyExists beta)
+--     dropMarker e3
+
+--     if chk
+--       then return $ Just (TyArrow (TyExists alpha) (TyExists beta))
+--       else return Nothing
 
 synthApplyType :: Term -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
 -- ∀App
@@ -135,3 +157,17 @@ newFree f = do
   let element = f freeCnt
   modify (\s -> s {freeCount = freeCnt + 1})
   return (freeCnt, element)
+
+addForall :: FreeName -> CType 'Polytype -> CType 'Polytype
+addForall name t = TyForall (go 0 name t)
+  where
+    go :: Int -> FreeName -> CType 'Polytype -> CType 'Polytype
+    go i n (TyArrow ty1 ty2) = TyArrow (go i n ty1) (go i n ty2)
+    go _ _ TyUnit = TyUnit
+    go _ _ (TyVar (TyI tyi)) = TyVar (TyI (tyi + 1))
+    go _ _ tv@(TyVar _) = tv
+    go i n te@(TyExists ty) =
+      if ty == n
+        then TyVar (TyI (TyIdx i))
+        else te
+    go i n (TyForall ty) = go (i + 1) n ty
