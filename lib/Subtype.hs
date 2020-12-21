@@ -3,7 +3,6 @@
 
 module Subtype where
 
-import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
 import qualified Data.Set as S
 import Types
@@ -193,75 +192,68 @@ subtype ty1 ty2 = do
 instantiateL :: FreeName -> CType 'Polytype -> ScopeGen Bool
 instantiateL alpha a = do
   solvedA <- solve alpha a
+  -- Inst-L-Solve
   if solvedA
     then return True
     else case a of
-      TyExists beta -> do
-        aBefore <- comesBefore alpha beta
-        if aBefore
-          then solve beta (TyExists alpha)
-          else solve alpha (TyExists beta)
-      TyArrow a1 a2 -> do
-        ctx <- gets context
-        freeCnt <- gets freeCount
-        let alpha1 = freeCnt
-        let alpha2 = freeCnt + 1
+      -- Inst-L-Reach
+      TyExists beta -> solve beta (TyExists alpha)
+      -- Inst-L-Arr
+      TyArrow ty1 ty2 -> do
+        (alpha1, e1) <- newFree CtxExist
+        (alpha2, e2) <- newFree CtxExist
         let ctxToAdd =
-              [ CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2)),
-                CtxExist alpha1,
-                CtxExist alpha2
+              [ e2,
+                e1,
+                CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2))
               ]
-        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
-        modify (\s -> s {context = ctx', freeCount = freeCnt + 2})
-        liftA2 (&&) (instantiateR a1 alpha1) (instantiateL alpha2 (apply ctx' a2))
-      TyForall b -> do
         ctx <- gets context
-        freeCnt <- gets freeCount
-        let beta' = freeCnt
-        let ctx' = CtxForall beta' : ctx
-
-        modify (\s -> s {context = ctx', freeCount = freeCnt + 1})
-        ret <- instantiateL alpha (typeSubst (TyI 0) (TyForall (TyVar (TyN beta'))) b)
-        dropMarker (CtxForall beta')
-
+        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
+        modify (\s -> s {context = ctx'})
+        ir <- instantiateR ty1 alpha1
+        ctx'' <- gets context
+        il <- instantiateL alpha2 (apply ctx'' ty2)
+        return $ ir && il
+      -- Inst-L-All-R
+      TyForall b -> do
+        (beta, m) <- addNewToCtx CtxForall
+        ret <- instantiateL alpha (typeSubst (TyI 0) (TyForall (TyVar (TyN beta))) b)
+        dropMarker m
         return ret
       _ -> return False
 
 instantiateR :: CType 'Polytype -> FreeName -> ScopeGen Bool
 instantiateR a alpha = do
-  wf1 <- checkTypeWF (ctypeToPoly a)
-  wf2 <- checkTypeWF (ctypeToPoly (TyExists alpha))
+  -- Inst-R-Solve
   solvedA <- solve alpha a
   if solvedA
-    then return $ wf1 && wf2
+    then return True
     else case a of
-      TyExists beta -> do
-        aBefore <- comesBefore alpha beta
-        if aBefore
-          then solve beta (TyExists alpha)
-          else solve alpha (TyExists beta)
-      TyArrow a1 a2 -> do
-        ctx <- gets context
-        freeCnt <- gets freeCount
-        let alpha1 = freeCnt
-        let alpha2 = freeCnt + 1
+      -- Inst-R-Reach
+      TyExists beta -> solve beta (TyExists alpha)
+      -- Inst-R-Arr
+      TyArrow ty1 ty2 -> do
+        (alpha1, e1) <- newFree CtxExist
+        (alpha2, e2) <- newFree CtxExist
         let ctxToAdd =
-              [ CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2)),
-                CtxExist alpha1,
-                CtxExist alpha2
+              [ e2,
+                e1,
+                CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2))
               ]
-        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
-        modify (\s -> s {context = ctx', freeCount = freeCnt + 2})
-        liftA2 (&&) (instantiateL alpha1 a1) (instantiateR (apply ctx' a2) alpha2)
-      TyForall b -> do
+
         ctx <- gets context
-        freeCnt <- gets freeCount
-        let beta' = freeCnt
-        let ctx' = CtxExist beta' : CtxMarker beta' : ctx
-
-        modify (\s -> s {context = ctx', freeCount = freeCnt + 1})
-        ret <- instantiateL alpha (typeSubst (TyI 0) (TyExists beta') b)
-        dropMarker (CtxMarker beta')
-
+        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
+        modify (\s -> s {context = ctx'})
+        il <- instantiateL alpha1 ty1
+        ctx'' <- gets context
+        ir <- instantiateR (apply ctx'' ty2) alpha2
+        return $ il && ir
+      -- Inst-R-All-L
+      TyForall b -> do
+        (beta, e) <- newFree CtxExist
+        let marker = CtxMarker beta
+        appendToCtx [marker, e]
+        ret <- instantiateR (typeSubst (TyI 0) (TyExists beta) b) alpha
+        dropMarker marker
         return ret
       _ -> return False
