@@ -37,6 +37,7 @@ lookupSolution (c : cs) n =
         else lookupSolution cs n
     _ -> lookupSolution cs n
 
+-- TODO: Remove from state monad
 comesBefore :: FreeName -> FreeName -> ScopeGen Bool
 comesBefore alpha beta = do
   ctx <- gets context
@@ -93,53 +94,47 @@ markers = go
     go ((CtxMarker n) : xs) = n : go xs
     go (_ : xs) = go xs
 
-ctxWF :: ScopeGen Bool
-ctxWF = do
-  ctx <- gets context
-  go ctx
-  where
-    go :: Context -> ScopeGen Bool
-    go [] = return True
-    go (c : cs) = case c of
-      CtxForall n -> return $ n `notElem` foralls cs
-      CtxVar n ty -> do
-        modify (\s -> s {context = cs})
-        chk <- (&&) (n `notElem` vars cs) <$> typeWF ty
-        modify (\s -> s {context = cs})
-        return chk
-      CtxExist n -> return $ n `notElem` existentials cs
-      CtxExistSolved n ty -> do
-        modify (\s -> s {context = cs})
-        chk <- (&&) (n `notElem` existentials cs) <$> typeWF ty
-        modify (\s -> s {context = cs})
-        return chk
-      CtxMarker n ->
-        return $ n `notElem` markers cs && n `notElem` existentials cs
+ctxWF :: Context -> FreeName -> Bool
+-- Empty-Ctx
+ctxWF [] _ = True
+ctxWF (c : cs) fc =
+  ctxWF cs fc && case c of
+    -- U-Var-Ctx
+    CtxForall n -> n `notElem` foralls cs
+    -- Var-Ctx
+    CtxVar n ty -> (n `notElem` vars cs) && typeWF cs fc ty
+    -- E-Var-Ctx
+    CtxExist n -> n `notElem` existentials cs
+    -- Solved-E-Var-Ctx
+    CtxExistSolved n ty -> (n `notElem` existentials cs) && typeWF cs fc ty
+    -- Marker-Ctx
+    CtxMarker n -> n `notElem` markers cs && n `notElem` existentials cs
 
-typeWF :: CType a -> ScopeGen Bool
-typeWF ty = do
-  ctx <- gets context
-  case ty of
-    TyVar (TyN n) -> return $ n `elem` foralls ctx
-    TyVar (TyI _) -> return False
-    TyUnit -> return True
-    TyArrow a b -> liftA2 (&&) (typeWF a) (typeWF b)
-    TyForall a -> do
-      freeCnt <- gets freeCount
-      let alpha = freeCnt
-      let ctx' = CtxForall alpha : ctx
-
-      modify (\s -> s {freeCount = freeCnt + 1, context = ctx'})
-      chk <- typeWF (typeSubst (TyI 0) (TyExists alpha) a)
-      modify (\s -> s {freeCount = freeCnt, context = ctx})
-      return chk
-    TyExists n -> return $ n `elem` existentials ctx
+typeWF :: Context -> FreeName -> CType a -> Bool
+typeWF ctx fc ty = case ty of
+  -- U-Var-WF
+  TyVar (TyN n) -> n `elem` foralls ctx
+  TyVar (TyI _) -> False
+  -- Unit-WF
+  TyUnit -> True
+  -- Arrow-WF
+  TyArrow a b -> typeWF ctx fc a && typeWF ctx fc b
+  -- Forall-WF
+  TyForall a -> typeWF (CtxForall fc : ctx) (fc + 1) (typeSubst (TyI 0) (TyExists fc) a)
+  -- E-Var-WF and Solved-E-Var-WF
+  TyExists n -> n `elem` existentials ctx
 
 checkCtxWF :: ScopeGen Bool
-checkCtxWF = do ctxWF
+checkCtxWF = do
+  fc <- gets freeCount
+  ctx <- gets context
+  return $ ctxWF ctx fc
 
 checkTypeWF :: CType 'Polytype -> ScopeGen Bool
-checkTypeWF = do typeWF
+checkTypeWF ty = do
+  fc <- gets freeCount
+  ctx <- gets context
+  return $ typeWF ctx fc ty
 
 subtype :: CType a -> CType a -> ScopeGen Bool
 subtype ty1 ty2 = do
