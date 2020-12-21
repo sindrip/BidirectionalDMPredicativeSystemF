@@ -66,8 +66,7 @@ typeSubst i ty' (TyExists n) =
     else TyExists n
 typeSubst i ty' (TyForall ty1) =
   case i of
-    (TyI 0) -> TyForall ty1
-    (TyI n) -> TyForall (typeSubst (TyI (n -1)) ty' ty1)
+    (TyI n) -> TyForall (typeSubst (TyI (n + 1)) ty' ty1)
     _ -> TyForall (typeSubst i ty' ty1)
 
 newtype TmIdx = TmIdx Int
