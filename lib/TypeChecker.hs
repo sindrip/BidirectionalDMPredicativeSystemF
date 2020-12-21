@@ -3,6 +3,7 @@
 
 module TypeChecker where
 
+import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
 import Subtype (apply, subtype, unsolvedExi)
 import Types
@@ -135,7 +136,10 @@ checkType tm ty =
   do
     mt <- synthType' tm
     case mt of
-      Just t -> subtype t ty
+      Just t -> do
+        a <- apply t
+        b <- apply ty
+        subtype a b
       Nothing -> return False
 
 appendToCtx :: [CtxElem] -> ScopeGen ()
