@@ -50,9 +50,10 @@ synthType' Unit = return $ Just TyUnit
 synthType' (App ts tc) =
   do
     mt <- synthType' ts
+    ctx <- gets context
     case mt of
       Just t -> do
-        a <- apply t
+        let a = apply ctx t
         synthApplyType tc a
       Nothing -> return Nothing
 
@@ -69,8 +70,7 @@ synthType' (Abs tm) = do
     then do
       ctx <- gets context
       let (delta, delta') = breakMarker marker ctx
-      modify (\s -> s {context = delta'})
-      tau <- apply (TyArrow (TyExists alpha) (TyExists beta))
+      let tau = apply delta' (TyArrow (TyExists alpha) (TyExists beta))
       let unsolved = unsolvedExi delta'
       let t = foldr addForall tau unsolved
       modify (\s -> s {context = delta})
@@ -140,11 +140,9 @@ checkType Unit TyUnit = return True
 checkType tm ty =
   do
     mt <- synthType' tm
+    ctx <- gets context
     case mt of
-      Just t -> do
-        a <- apply t
-        b <- apply ty
-        subtype a b
+      Just t -> subtype (apply ctx t) (apply ctx ty)
       Nothing -> return False
 
 appendToCtx :: [CtxElem] -> ScopeGen ()

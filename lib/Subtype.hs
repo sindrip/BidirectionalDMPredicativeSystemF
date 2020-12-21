@@ -46,18 +46,16 @@ comesBefore alpha beta = do
   modify (\s -> s {context = ctx})
   return ret
 
-apply :: CType 'Polytype -> ScopeGen (CType 'Polytype)
-apply ty = do
-  ctx <- gets context
-  case ty of
-    TyUnit -> return TyUnit
-    TyVar n -> return $ TyVar n
-    TyForall t -> TyForall <$> apply t
-    tye@(TyExists n) ->
-      case lookupSolution ctx n of
-        Just t -> apply (ctypeToPoly t)
-        Nothing -> return tye
-    TyArrow ty1 ty2 -> liftA2 TyArrow (apply ty1) (apply ty2)
+apply :: Context -> CType 'Polytype -> CType 'Polytype
+apply ctx ty = case ty of
+  TyUnit -> TyUnit
+  TyVar n -> TyVar n
+  TyForall t -> TyForall $ apply ctx t
+  tye@(TyExists n) ->
+    case lookupSolution ctx n of
+      Just t -> apply ctx (ctypeToPoly t)
+      Nothing -> tye
+  TyArrow ty1 ty2 -> TyArrow (apply ctx ty1) (apply ctx ty2)
 
 existentials :: Context -> [FreeName]
 existentials = go
@@ -159,9 +157,9 @@ subtype ty1 ty2 = do
     (TyArrow a1 a2, TyArrow b1 b2) -> do
       ctx' <- gets context
       st1 <- subtype b1 a1
-      st2 <- subtype <$> apply (ctypeToPoly a2) <*> apply (ctypeToPoly b2)
+      st2 <- subtype (apply ctx' (ctypeToPoly a2)) (apply ctx' (ctypeToPoly b2))
       modify (\s -> s {context = ctx'})
-      (&&) st1 <$> st2
+      return $ st1 && st2
     -- <:∀R
     (a, TyForall ty) -> do
       ctx' <- gets context
@@ -226,7 +224,7 @@ instantiateL alpha a = do
               ]
         let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
         modify (\s -> s {context = ctx', freeCount = freeCnt + 2})
-        liftA2 (&&) (instantiateR a1 alpha1) (apply a2 >>= instantiateL alpha2)
+        liftA2 (&&) (instantiateR a1 alpha1) (instantiateL alpha2 (apply ctx' a2))
       TyForall b -> do
         ctx <- gets context
         freeCnt <- gets freeCount
@@ -265,7 +263,7 @@ instantiateR a alpha = do
               ]
         let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
         modify (\s -> s {context = ctx', freeCount = freeCnt + 2})
-        liftA2 (&&) (instantiateL alpha1 a1) (apply a2 >>= flip instantiateR alpha2)
+        liftA2 (&&) (instantiateL alpha1 a1) (instantiateR (apply ctx' a2) alpha2)
       TyForall b -> do
         ctx <- gets context
         freeCnt <- gets freeCount
