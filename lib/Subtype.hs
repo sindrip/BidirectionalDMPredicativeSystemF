@@ -11,11 +11,16 @@ import Types
 solve :: FreeName -> CType a -> ScopeGen Bool
 solve alpha a = case ctypeToMono a of
   Just t -> do
+    fc <- gets freeCount
     ctx <- gets context
-    let ctxToAdd = [CtxExistSolved alpha t]
-    let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
-    modify (\s -> s {context = ctx'})
-    return True
+    let (l, r) = breakMarker (CtxExist alpha) ctx
+    let wf = typeWF l fc a
+    if wf
+      then do
+        let ctx' = l ++ [CtxExistSolved alpha t] ++ r
+        modify (\s -> s {context = ctx'})
+        return True
+      else return False
   Nothing -> return False
 
 freeTyVars :: CType a -> S.Set FreeName
@@ -138,69 +143,58 @@ checkTypeWF ty = do
 
 subtype :: CType a -> CType a -> ScopeGen Bool
 subtype ty1 ty2 = do
-  ctx <- gets context
-  wf1 <- checkTypeWF (ctypeToPoly ty1)
-  wf2 <- checkTypeWF (ctypeToPoly ty2)
-  st <- case (ty1, ty2) of
+  case (ty1, ty2) of
     -- <:Var
     (TyVar n, TyVar n') -> return $ n == n'
     -- <:Unit
     (TyUnit, TyUnit) -> return True
     -- <:ExVar
-    (TyExists n, TyExists n') -> return $ n == n' && n `elem` existentials ctx
+    (TyExists n, TyExists n') -> do
+      ctx <- gets context
+      return $ n == n' && n `elem` existentials ctx
     -- <:→
     (TyArrow a1 a2, TyArrow b1 b2) -> do
-      ctx' <- gets context
       st1 <- subtype b1 a1
-      st2 <- subtype (apply ctx' (ctypeToPoly a2)) (apply ctx' (ctypeToPoly b2))
-      modify (\s -> s {context = ctx'})
+      ctx <- gets context
+      st2 <- subtype (apply ctx (ctypeToPoly a2)) (apply ctx (ctypeToPoly b2))
       return $ st1 && st2
     -- <:∀R
     (a, TyForall ty) -> do
-      ctx' <- gets context
-      freeCnt <- gets freeCount
-      let alpha = freeCnt
-      let ctx'' = CtxForall alpha : ctx'
-      modify (\s -> s {context = ctx''})
+      (alpha, m) <- addNewToCtx CtxForall
       st <- subtype a (typeSubst (TyI 0) (TyVar (TyN alpha)) ty)
-      dropMarker (CtxForall alpha)
+      dropMarker m
       return st
     -- <:∀L
     (TyForall ty, a) -> do
-      ctx' <- gets context
-      freeCnt <- gets freeCount
-      let alpha = freeCnt
-      let ctx'' = CtxExist alpha : CtxMarker alpha : ctx'
-      modify (\s -> s {context = ctx''})
+      (alpha, e) <- newFree CtxForall
+      let marker = CtxMarker alpha
+      appendToCtx [marker, e]
       st <- subtype (typeSubst (TyI 0) (TyVar (TyN alpha)) ty) a
-      dropMarker (CtxMarker alpha)
+      dropMarker marker
       return st
     -- <:InstantiateL
     (TyExists n, a) -> do
-      ctx' <- gets context
+      ctx <- gets context
       (&&)
-        ( (n `elem` existentials ctx')
+        ( (n `elem` existentials ctx)
             && n `notElem` freeTyVars a
         )
         <$> instantiateL n (ctypeToPoly a)
     -- <:InstantiateR
     (a, TyExists n) -> do
-      ctx' <- gets context
+      ctx <- gets context
       (&&)
-        ( (n `elem` existentials ctx')
+        ( (n `elem` existentials ctx)
             && n `notElem` freeTyVars a
         )
         <$> instantiateR (ctypeToPoly a) n
     _ -> return False
-  return $ wf1 && wf2 && st
 
 instantiateL :: FreeName -> CType 'Polytype -> ScopeGen Bool
 instantiateL alpha a = do
-  wf1 <- checkTypeWF (ctypeToPoly a)
-  wf2 <- checkTypeWF (ctypeToPoly (TyExists alpha))
   solvedA <- solve alpha a
   if solvedA
-    then return $ wf1 && wf2
+    then return True
     else case a of
       TyExists beta -> do
         aBefore <- comesBefore alpha beta

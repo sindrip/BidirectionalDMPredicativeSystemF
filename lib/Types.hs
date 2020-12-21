@@ -128,3 +128,36 @@ dropMarker m = do
   ctx <- gets context
   let ctx' = tail $ dropWhile (/= m) ctx
   modify (\s -> s {context = ctx'})
+
+appendToCtx :: [CtxElem] -> ScopeGen ()
+appendToCtx xs = do
+  ctx <- gets context
+  let ctx' = reverse xs ++ ctx
+  modify (\s -> s {context = ctx'})
+  return ()
+
+addNewToCtx :: (FreeName -> CtxElem) -> ScopeGen (FreeName, CtxElem)
+addNewToCtx f = do
+  (freeCnt, element) <- newFree f
+  appendToCtx [element]
+  return (freeCnt, element)
+
+newFree :: (FreeName -> CtxElem) -> ScopeGen (FreeName, CtxElem)
+newFree f = do
+  freeCnt <- gets freeCount
+  let element = f freeCnt
+  modify (\s -> s {freeCount = freeCnt + 1})
+  return (freeCnt, element)
+
+addForall :: FreeName -> CType 'Polytype -> CType 'Polytype
+addForall name t = TyForall (go 0 name t)
+  where
+    go :: Int -> FreeName -> CType 'Polytype -> CType 'Polytype
+    go i n (TyArrow ty1 ty2) = TyArrow (go i n ty1) (go i n ty2)
+    go _ _ TyUnit = TyUnit
+    go _ _ tv@(TyVar _) = tv
+    go i n te@(TyExists ty) =
+      if ty == n
+        then TyVar (TyI (TyIdx i))
+        else te
+    go i n (TyForall ty) = TyForall (go (i + 1) n ty)
