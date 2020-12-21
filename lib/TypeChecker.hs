@@ -3,9 +3,8 @@
 
 module TypeChecker where
 
-import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
-import Subtype (apply, subtype, unsolvedExi)
+import Subtype (apply, checkTypeWF, subtype, unsolvedExi)
 import Types
 
 lookupTypeOfVar :: Context -> FreeName -> Maybe (CType 'Polytype)
@@ -33,8 +32,12 @@ synthType' :: Term -> ScopeGen (Maybe (CType 'Polytype))
 -- Anno
 synthType' (Ann tm ty) =
   do
-    chk <- checkType tm ty
-    return $ if chk then Just ty else Nothing
+    tw <- checkTypeWF ty
+    if tw
+      then do
+        chk <- checkType tm ty
+        return $ if chk then Just ty else Nothing
+      else return Nothing
 -- Var
 synthType' (Var (TmN n)) = do
   ctx <- gets context
@@ -48,7 +51,9 @@ synthType' (App ts tc) =
   do
     mt <- synthType' ts
     case mt of
-      Just t -> synthApplyType tc t
+      Just t -> do
+        a <- apply t
+        synthApplyType tc a
       Nothing -> return Nothing
 
 -- →I-Synth (Damas-Milner)
