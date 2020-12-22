@@ -124,7 +124,7 @@ typeWF ctx fc ty = case ty of
   -- Arrow-WF
   TyArrow a b -> typeWF ctx fc a && typeWF ctx fc b
   -- Forall-WF
-  TyForall a -> typeWF (CtxForall fc : ctx) (fc + 1) (typeSubst (TyI 0) (TyExists fc) a)
+  TyForall a -> typeWF (CtxForall fc : ctx) (fc + 1) (typeSubst (TyI 0) (TyVar (TyN fc)) a)
   -- E-Var-WF and Solved-E-Var-WF
   TyExists n -> n `elem` existentials ctx
 
