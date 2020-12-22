@@ -159,3 +159,13 @@ addForall name t = TyForall (go 0 name t)
         then TyVar (TyI (TyIdx i))
         else te
     go i n (TyForall ty) = TyForall (go (i + 1) n ty)
+
+-- -- Auxiliary functions to return error messages to the userss
+failWith :: Monad m => a -> m (Either a b)
+failWith = return . Left
+
+succeedWith :: Monad m => b -> m (Either a b)
+succeedWith = return . Right
+
+succeed :: Monad m => m (Either a ())
+succeed = succeedWith ()

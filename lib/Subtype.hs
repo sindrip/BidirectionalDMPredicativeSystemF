@@ -3,11 +3,12 @@
 
 module Subtype where
 
+import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
 import qualified Data.Set as S
 import Types
 
-solve :: FreeName -> CType a -> ScopeGen Bool
+solve :: FreeName -> CType a -> ScopeGen (Either String ())
 solve alpha a = case ctypeToMono a of
   Just t -> do
     fc <- gets freeCount
@@ -18,9 +19,9 @@ solve alpha a = case ctypeToMono a of
       then do
         let ctx' = replaceCtxExistWith ctx (CtxExist alpha) [CtxExistSolved alpha t]
         modify (\s -> s {context = ctx'})
-        return True
-      else return False
-  Nothing -> return False
+        succeed
+      else failWith $ "Type: " ++ show a ++ " is not well-formed"
+  Nothing -> failWith $ "Type: " ++ show a ++ " is not a monotype"
 
 freeTyVars :: CType a -> S.Set FreeName
 freeTyVars ty = case ty of
@@ -134,29 +135,32 @@ checkCtxWF = do
   ctx <- gets context
   return $ ctxWF ctx fc
 
-checkTypeWF :: CType 'Polytype -> ScopeGen Bool
+checkTypeWF :: CType 'Polytype -> ScopeGen (Either String ())
 checkTypeWF ty = do
   fc <- gets freeCount
   ctx <- gets context
-  return $ typeWF ctx fc ty
+  if typeWF ctx fc ty
+    then succeed
+    else failWith $ "Type: " ++ show ty ++ " is not well-formed"
 
-subtype :: CType a -> CType a -> ScopeGen Bool
+subtype :: CType a -> CType a -> ScopeGen (Either String ())
 subtype ty1 ty2 = do
   ctx <- gets context
   case (ty1, ty2) of
     -- <:Var
     (TyVar n, TyVar n')
-      | n == n' -> return True
+      | n == n' -> succeed
     -- <:Unit
-    (TyUnit, TyUnit) -> return True
+    (TyUnit, TyUnit) -> succeed
     -- <:ExVar
     (TyExists n, TyExists n')
-      | n == n' && n `elem` existentials ctx -> return True
+      | n == n' && n `elem` existentials ctx -> succeed
     -- <:→
     (TyArrow a1 a2, TyArrow b1 b2) -> do
-      st1 <- subtype b1 a1
-      st2 <- subtype (apply ctx (ctypeToPoly a2)) (apply ctx (ctypeToPoly b2))
-      return $ st1 && st2
+      let st1 = subtype b1 a1
+      ctx' <- gets context
+      let st2 = subtype (apply ctx' (ctypeToPoly a2)) (apply ctx' (ctypeToPoly b2))
+      liftA2 return st1 st2
     -- <:∀R
     (a, TyForall ty) -> do
       (alpha, m) <- addNewToCtx CtxForall
@@ -172,86 +176,85 @@ subtype ty1 ty2 = do
       dropMarker marker
       return st
     -- <:InstantiateL
-    (TyExists n, a) -> do
-      (&&)
-        ( (n `elem` existentials ctx)
-            && n `notElem` freeTyVars a
-        )
-        <$> instantiateL n (ctypeToPoly a)
+    (TyExists n, a)
+      | (n `elem` existentials ctx)
+          && n `notElem` freeTyVars a ->
+        instantiateL n (ctypeToPoly a)
     -- <:InstantiateR
-    (a, TyExists n) -> do
-      (&&)
-        ( (n `elem` existentials ctx)
-            && n `notElem` freeTyVars a
-        )
-        <$> instantiateR (ctypeToPoly a) n
-    _ -> return False
+    (a, TyExists n)
+      | (n `elem` existentials ctx)
+          && n `notElem` freeTyVars a ->
+        instantiateR (ctypeToPoly a) n
+    _ -> failWith "Couldn't match any case in the function: subtype"
 
-instantiateL :: FreeName -> CType 'Polytype -> ScopeGen Bool
+instantiateL :: FreeName -> CType 'Polytype -> ScopeGen (Either String ())
 instantiateL alpha a = do
   solvedA <- solve alpha a
-  -- Inst-L-Solve
-  if solvedA
-    then return True
-    else case a of
-      -- Inst-L-Reach
-      TyExists beta -> solve beta (TyExists alpha)
-      -- Inst-L-Arr
-      TyArrow ty1 ty2 -> do
-        (alpha1, e1) <- newFree CtxExist
-        (alpha2, e2) <- newFree CtxExist
-        let ctxToAdd =
-              [ e2,
-                e1,
-                CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2))
-              ]
-        ctx <- gets context
-        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
-        modify (\s -> s {context = ctx'})
-        ir <- instantiateR ty1 alpha1
-        ctx'' <- gets context
-        il <- instantiateL alpha2 (apply ctx'' ty2)
-        return $ ir && il
-      -- Inst-L-All-R
-      TyForall b -> do
-        (beta, m) <- addNewToCtx CtxForall
-        ret <- instantiateL alpha (typeSubst (TyI 0) (TyVar (TyN beta)) b)
-        dropMarker m
-        return ret
-      _ -> return False
+  case solvedA of
+    -- Inst-L-Solve
+    Right _ -> succeed
+    Left _ ->
+      case a of
+        -- Inst-L-Reach
+        TyExists beta -> solve beta (TyExists alpha)
+        -- Inst-L-Arr
+        TyArrow ty1 ty2 -> do
+          (alpha1, e1) <- newFree CtxExist
+          (alpha2, e2) <- newFree CtxExist
+          let ctxToAdd =
+                [ e2,
+                  e1,
+                  CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2))
+                ]
+          ctx <- gets context
+          let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
+          modify (\s -> s {context = ctx'})
+          ir <- instantiateR ty1 alpha1
+          ctx'' <- gets context
+          il <- instantiateL alpha2 (apply ctx'' ty2)
+          return (return ir il)
+        -- liftA2 return ir il
+        -- Inst-L-All-R
+        TyForall b -> do
+          (beta, m) <- addNewToCtx CtxForall
+          ret <- instantiateL alpha (typeSubst (TyI 0) (TyVar (TyN beta)) b)
+          dropMarker m
+          return ret
+        _ -> failWith "Couldn't match any case in the function: instantiateL"
 
-instantiateR :: CType 'Polytype -> FreeName -> ScopeGen Bool
+instantiateR :: CType 'Polytype -> FreeName -> ScopeGen (Either String ())
 instantiateR a alpha = do
-  -- Inst-R-Solve
   solvedA <- solve alpha a
-  if solvedA
-    then return True
-    else case a of
-      -- Inst-R-Reach
-      TyExists beta -> solve beta (TyExists alpha)
-      -- Inst-R-Arr
-      TyArrow ty1 ty2 -> do
-        (alpha1, e1) <- newFree CtxExist
-        (alpha2, e2) <- newFree CtxExist
-        let ctxToAdd =
-              [ e2,
-                e1,
-                CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2))
-              ]
+  case solvedA of
+    -- Inst-R-Solve
+    Right _ -> succeed
+    Left _ ->
+      case a of
+        -- Inst-R-Reach
+        TyExists beta -> solve beta (TyExists alpha)
+        -- Inst-R-Arr
+        TyArrow ty1 ty2 -> do
+          (alpha1, e1) <- newFree CtxExist
+          (alpha2, e2) <- newFree CtxExist
+          let ctxToAdd =
+                [ e2,
+                  e1,
+                  CtxExistSolved alpha (TyArrow (TyExists alpha1) (TyExists alpha2))
+                ]
 
-        ctx <- gets context
-        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
-        modify (\s -> s {context = ctx'})
-        il <- instantiateL alpha1 ty1
-        ctx'' <- gets context
-        ir <- instantiateR (apply ctx'' ty2) alpha2
-        return $ il && ir
-      -- Inst-R-All-L
-      TyForall b -> do
-        (beta, e) <- newFree CtxExist
-        let marker = CtxMarker beta
-        appendToCtx [marker, e]
-        ret <- instantiateR (typeSubst (TyI 0) (TyExists beta) b) alpha
-        dropMarker marker
-        return ret
-      _ -> return False
+          ctx <- gets context
+          let ctx' = replaceCtxExistWith ctx (CtxExist alpha) ctxToAdd
+          modify (\s -> s {context = ctx'})
+          il <- instantiateL alpha1 ty1
+          ctx'' <- gets context
+          ir <- instantiateR (apply ctx'' ty2) alpha2
+          return (return il ir)
+        -- Inst-R-All-L
+        TyForall b -> do
+          (beta, e) <- newFree CtxExist
+          let marker = CtxMarker beta
+          appendToCtx [marker, e]
+          ret <- instantiateR (typeSubst (TyI 0) (TyExists beta) b) alpha
+          dropMarker marker
+          return ret
+        _ -> failWith "Couldn't match any case in the function: instantiateR"

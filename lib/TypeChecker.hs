@@ -17,7 +17,7 @@ lookupTypeOfVar (c : cs) n =
         else lookupTypeOfVar cs n
     _ -> lookupTypeOfVar cs n
 
-synthType :: Term -> Maybe (CType 'Polytype)
+synthType :: Term -> Either String (CType 'Polytype)
 synthType tm =
   let initState =
         ScopeState
@@ -26,34 +26,41 @@ synthType tm =
           }
    in evalState (synthType' tm) initState
 
-synthType' :: Term -> ScopeGen (Maybe (CType 'Polytype))
+synthType' :: Term -> ScopeGen (Either String (CType 'Polytype))
 -- Anno
 synthType' (Ann tm ty) =
   do
     tw <- checkTypeWF ty
-    if tw
-      then do
+    case tw of
+      Left e -> failWith e
+      Right _ -> do
         chk <- checkType tm ty
-        return $ if chk then Just ty else Nothing
-      else return Nothing
+        case chk of
+          Left e -> failWith e
+          Right _ -> succeedWith ty
 -- Var
 synthType' (Var (TmN n)) = do
   ctx <- gets context
-  return $ lookupTypeOfVar ctx n
+  case lookupTypeOfVar ctx n of
+    Nothing -> failWith "Cannot find variable in context"
+    Just ty -> succeedWith ty
+
+-- case lookupTypeOfVar ctx n of
+
 -- Var (not applicable)
-synthType' (Var (TmI _)) = return Nothing
+synthType' (Var (TmI _)) = failWith "Unscoped bound variable encountered"
 -- 1I-synth
-synthType' Unit = return $ Just TyUnit
+synthType' Unit = succeedWith TyUnit
 -- →E
 synthType' (App ts tc) =
   do
     mt <- synthType' ts
-    ctx <- gets context
     case mt of
-      Just t -> do
+      Left e -> failWith e
+      Right t -> do
+        ctx <- gets context
         let a = apply ctx t
         synthApplyType tc a
-      Nothing -> return Nothing
 
 -- →I-Synth (Damas-Milner)
 synthType' (Abs tm) = do
@@ -64,16 +71,16 @@ synthType' (Abs tm) = do
   appendToCtx [marker, e1, e2, e3]
   chk <- checkType (subst (TmI 0) (Var (TmN x)) tm) (TyExists beta)
 
-  if chk
-    then do
+  case chk of
+    Left e -> failWith e
+    Right _ -> do
       ctx <- gets context
       let (delta, delta') = breakMarker marker ctx
       let tau = apply delta' (TyArrow (TyExists alpha) (TyExists beta))
       let unsolved = unsolvedExi delta'
       let t = foldr addForall tau unsolved
       modify (\s -> s {context = delta})
-      return $ Just t
-    else return Nothing
+      succeedWith t
 
 -- →I-Synth (Original rule)
 -- synthType' (Abs tm) =
@@ -90,7 +97,7 @@ synthType' (Abs tm) = do
 --       then return $ Just (TyArrow (TyExists alpha) (TyExists beta))
 --       else return Nothing
 
-synthApplyType :: Term -> CType 'Polytype -> ScopeGen (Maybe (CType 'Polytype))
+synthApplyType :: Term -> CType 'Polytype -> ScopeGen (Either String (CType 'Polytype))
 -- ∀App
 synthApplyType tm (TyForall ty) =
   do
@@ -109,15 +116,19 @@ synthApplyType tm (TyExists ty) =
     modify (\s -> s {context = ctx'})
 
     chk <- checkType tm (TyExists alpha)
-    return $ if chk then Just $ TyExists beta else Nothing
+    case chk of
+      Left e -> failWith e
+      Right _ -> succeedWith (TyExists beta)
 -- →App
 synthApplyType tm (TyArrow ty1 ty2) =
   do
     chk <- checkType tm ty1
-    return $ if chk then Just ty2 else Nothing
-synthApplyType _ _ = return Nothing
+    case chk of
+      Left e -> failWith e
+      Right _ -> succeedWith ty2
+synthApplyType _ _ = failWith "Couldn't match any case in the function: synthApplyType"
 
-checkType :: Term -> CType 'Polytype -> ScopeGen Bool
+checkType :: Term -> CType 'Polytype -> ScopeGen (Either String ())
 -- →I
 checkType (Abs tm) (TyArrow ty1 ty2) =
   do
@@ -133,12 +144,12 @@ checkType tm (TyForall ty) =
     dropMarker m
     return ret
 -- 1I
-checkType Unit TyUnit = return True
+checkType Unit TyUnit = succeed
 -- Sub
 checkType tm ty =
   do
     mt <- synthType' tm
     ctx <- gets context
     case mt of
-      Just t -> subtype (apply ctx t) (apply ctx ty)
-      Nothing -> return False
+      Left e -> failWith e
+      Right t -> subtype (apply ctx t) (apply ctx ty)
