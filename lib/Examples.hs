@@ -11,11 +11,20 @@ zeroU = Abs (Abs (Ann (Var (TmI 0)) TyUnit))
 zero :: Term
 zero = Abs (Abs (Var (TmI 0)))
 
+one :: Term
+one = Abs (Abs (App (Var (TmI 1)) (Var (TmI 0))))
+
+two :: Term
+two = Abs (Abs (App (Var (TmI 1)) (App (Var (TmI 1)) (Var (TmI 0)))))
+
+three :: Term
+three = Abs (Abs (App (Var (TmI 1)) (App (Var (TmI 1)) (App (Var (TmI 1)) (Var (TmI 0))))))
+
 suc :: Term
 suc = Abs (Abs (Abs (App (Var (TmI 1)) (App (App (Var (TmI 2)) (Var (TmI 1))) (Var (TmI 0))))))
 
-one :: Term
-one = App suc zero
+oneZeroSuc :: Term
+oneZeroSuc = App suc zero
 
 add :: Term
 add = Abs (Abs (Abs (Abs (App (App (Var (TmI 3)) (Var (TmI 1))) (App (App (Var (TmI 2)) (Var (TmI 1))) (Var (TmI 0)))))))
