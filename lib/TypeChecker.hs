@@ -51,7 +51,14 @@ synthType' (Var (TmN n)) = do
 synthType' (Var (TmI _)) = failWith "Unscoped bound variable encountered"
 -- 1I-synth
 synthType' Unit = succeedWith TyUnit
--- →E
+-- →E (Damas-Milner)
+--
+-- This rule change is not mentioned in the paper
+-- Without this change, we cannot synthesize simple types such as
+-- succ (Zero)
+--
+-- With it, we can synthesize church numerals with succ
+--
 synthType' (App ts tc) =
   do
     mt <- synthType' ts
@@ -60,8 +67,32 @@ synthType' (App ts tc) =
       Right t -> do
         ctx <- gets context
         let a = apply ctx t
-        synthApplyType tc a
 
+        (_, marker) <- newFree CtxMarker
+        appendToCtx [marker]
+
+        sat <- synthApplyType tc a
+
+        case sat of
+          Left e -> failWith e
+          Right sty -> do
+            ctx' <- gets context
+            let (delta, delta') = breakMarker marker ctx'
+            let tau = apply delta' sty
+            let unsolved = unsolvedExi delta'
+            let rt = foldr addForall tau unsolved
+            modify (\s -> s {context = delta})
+            succeedWith rt
+-- -- →E (Old rule)
+-- synthType' (App ts tc) =
+--   do
+--     mt <- synthType' ts
+--     case mt of
+--       Left e -> failWith e
+--       Right t -> do
+--         ctx <- gets context
+--         let a = apply ctx t
+--         synthApplyType tc a
 -- →I-Synth (Damas-Milner)
 synthType' (Abs tm) = do
   (alpha, e1) <- newFree CtxExist
