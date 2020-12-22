@@ -12,11 +12,11 @@ solve alpha a = case ctypeToMono a of
   Just t -> do
     fc <- gets freeCount
     ctx <- gets context
-    let (l, r) = breakMarker (CtxExist alpha) ctx
+    let (l, _) = breakMarker (CtxExist alpha) ctx
     let wf = typeWF l fc a
     if wf
       then do
-        let ctx' = l ++ [CtxExistSolved alpha t] ++ r
+        let ctx' = replaceCtxExistWith ctx (CtxExist alpha) [CtxExistSolved alpha t]
         modify (\s -> s {context = ctx'})
         return True
       else return False
