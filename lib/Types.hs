@@ -113,9 +113,7 @@ breakMarker :: CtxElem -> Context -> (Context, Context)
 breakMarker m ctx = let (l, _ : r) = break (== m) ctx in (r, l)
 
 data ScopeState = ScopeState
-  { termIdx :: TmIdx,
-    typeIdx :: TyIdx,
-    freeCount :: FreeName,
+  { freeCount :: FreeName,
     context :: Context
   }
   deriving (Show, Eq)

@@ -21,9 +21,7 @@ synthType :: Term -> Maybe (CType 'Polytype)
 synthType tm =
   let initState =
         ScopeState
-          { termIdx = 0,
-            typeIdx = 0,
-            freeCount = 0,
+          { freeCount = 0,
             context = []
           }
    in evalState (synthType' tm) initState
