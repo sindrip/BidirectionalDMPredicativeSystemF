@@ -121,12 +121,14 @@ data ScopeState = ScopeState
 -- Type alias for the State monad
 type ScopeGen a = State ScopeState a
 
+-- Drop all elements up to and including the one that is passed in
 dropMarker :: CtxElem -> ScopeGen ()
 dropMarker m = do
   ctx <- gets context
   let ctx' = tail $ dropWhile (/= m) ctx
   modify (\s -> s {context = ctx'})
 
+-- Append a list of elements to the context, we reverse them to allow a natural input
 appendToCtx :: [CtxElem] -> ScopeGen ()
 appendToCtx xs = do
   ctx <- gets context
@@ -134,12 +136,14 @@ appendToCtx xs = do
   modify (\s -> s {context = ctx'})
   return ()
 
+-- Adds a new fresh variable to the context
 addNewToCtx :: (FreeName -> CtxElem) -> ScopeGen (FreeName, CtxElem)
 addNewToCtx f = do
   (freeCnt, element) <- newFree f
   appendToCtx [element]
   return (freeCnt, element)
 
+-- Generates a fresh new variable
 newFree :: (FreeName -> CtxElem) -> ScopeGen (FreeName, CtxElem)
 newFree f = do
   freeCnt <- gets freeCount
@@ -147,6 +151,7 @@ newFree f = do
   modify (\s -> s {freeCount = freeCnt + 1})
   return (freeCnt, element)
 
+-- Add a quantifier over a specific existential variable
 addForall :: FreeName -> CType 'Polytype -> CType 'Polytype
 addForall name t = TyForall (go 0 name t)
   where
@@ -160,7 +165,7 @@ addForall name t = TyForall (go 0 name t)
         else te
     go i n (TyForall ty) = TyForall (go (i + 1) n ty)
 
--- -- Auxiliary functions to return error messages to the user
+-- Either Monad helpers
 failWith :: Monad m => a -> m (Either a b)
 failWith = return . Left
 
