@@ -165,7 +165,7 @@ subtype ty1 ty2 = do
       return st
     -- <:∀L
     (TyForall ty, a) -> do
-      (alpha, e) <- newFree CtxForall
+      (alpha, e) <- newFree CtxExist
       let marker = CtxMarker alpha
       appendToCtx [marker, e]
       st <- subtype (typeSubst (TyI 0) (TyVar (TyN alpha)) ty) a
