@@ -142,19 +142,19 @@ checkTypeWF ty = do
 
 subtype :: CType a -> CType a -> ScopeGen Bool
 subtype ty1 ty2 = do
+  ctx <- gets context
   case (ty1, ty2) of
     -- <:Var
-    (TyVar n, TyVar n') -> return $ n == n'
+    (TyVar n, TyVar n')
+      | n == n' -> return True
     -- <:Unit
     (TyUnit, TyUnit) -> return True
     -- <:ExVar
-    (TyExists n, TyExists n') -> do
-      ctx <- gets context
-      return $ n == n' && n `elem` existentials ctx
+    (TyExists n, TyExists n')
+      | n == n' && n `elem` existentials ctx -> return True
     -- <:→
     (TyArrow a1 a2, TyArrow b1 b2) -> do
       st1 <- subtype b1 a1
-      ctx <- gets context
       st2 <- subtype (apply ctx (ctypeToPoly a2)) (apply ctx (ctypeToPoly b2))
       return $ st1 && st2
     -- <:∀R
@@ -173,7 +173,6 @@ subtype ty1 ty2 = do
       return st
     -- <:InstantiateL
     (TyExists n, a) -> do
-      ctx <- gets context
       (&&)
         ( (n `elem` existentials ctx)
             && n `notElem` freeTyVars a
@@ -181,7 +180,6 @@ subtype ty1 ty2 = do
         <$> instantiateL n (ctypeToPoly a)
     -- <:InstantiateR
     (a, TyExists n) -> do
-      ctx <- gets context
       (&&)
         ( (n `elem` existentials ctx)
             && n `notElem` freeTyVars a
