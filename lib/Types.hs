@@ -160,7 +160,7 @@ addForall name t = TyForall (go 0 name t)
         else te
     go i n (TyForall ty) = TyForall (go (i + 1) n ty)
 
--- -- Auxiliary functions to return error messages to the userss
+-- -- Auxiliary functions to return error messages to the user
 failWith :: Monad m => a -> m (Either a b)
 failWith = return . Left
 

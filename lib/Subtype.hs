@@ -3,7 +3,6 @@
 
 module Subtype where
 
-import Control.Applicative (Applicative (liftA2))
 import Control.Monad.State
 import qualified Data.Set as S
 import Types
@@ -157,10 +156,10 @@ subtype ty1 ty2 = do
       | n == n' && n `elem` existentials ctx -> succeed
     -- <:→
     (TyArrow a1 a2, TyArrow b1 b2) -> do
-      let st1 = subtype b1 a1
+      st1 <- subtype b1 a1
       ctx' <- gets context
-      let st2 = subtype (apply ctx' (ctypeToPoly a2)) (apply ctx' (ctypeToPoly b2))
-      liftA2 return st1 st2
+      st2 <- subtype (apply ctx' (ctypeToPoly a2)) (apply ctx' (ctypeToPoly b2))
+      return (return st1 st2)
     -- <:∀R
     (a, TyForall ty) -> do
       (alpha, m) <- addNewToCtx CtxForall
@@ -213,7 +212,6 @@ instantiateL alpha a = do
           ctx'' <- gets context
           il <- instantiateL alpha2 (apply ctx'' ty2)
           return (return ir il)
-        -- liftA2 return ir il
         -- Inst-L-All-R
         TyForall b -> do
           (beta, m) <- addNewToCtx CtxForall
