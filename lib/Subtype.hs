@@ -168,7 +168,7 @@ subtype ty1 ty2 = do
       (alpha, e) <- newFree CtxExist
       let marker = CtxMarker alpha
       appendToCtx [marker, e]
-      st <- subtype (typeSubst (TyI 0) (TyVar (TyN alpha)) ty) a
+      st <- subtype (typeSubst (TyI 0) (TyExists alpha) ty) a
       dropMarker marker
       return st
     -- <:InstantiateL
@@ -217,7 +217,7 @@ instantiateL alpha a = do
       -- Inst-L-All-R
       TyForall b -> do
         (beta, m) <- addNewToCtx CtxForall
-        ret <- instantiateL alpha (typeSubst (TyI 0) (TyForall (TyVar (TyN beta))) b)
+        ret <- instantiateL alpha (typeSubst (TyI 0) (TyVar (TyN beta)) b)
         dropMarker m
         return ret
       _ -> return False
