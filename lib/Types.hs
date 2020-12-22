@@ -106,7 +106,7 @@ type Context = [CtxElem]
 replaceCtxExistWith :: Context -> CtxElem -> Context -> Context
 replaceCtxExistWith ctx e toInsert =
   let (l, r) = breakMarker e ctx
-   in r ++ toInsert ++ l
+   in r ++ reverse toInsert ++ l
 
 -- Find a context element, drop it and split the context on it
 breakMarker :: CtxElem -> Context -> (Context, Context)
