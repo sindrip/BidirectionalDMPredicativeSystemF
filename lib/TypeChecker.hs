@@ -57,7 +57,7 @@ synthType' Unit = succeedWith TyUnit
 -- Without this change, we cannot synthesize simple types such as
 -- succ (Zero)
 --
--- With it, we can synthesize church numerals with succ
+-- With it, we can synthesize types for church numerals with succ
 --
 synthType' (App ts tc) =
   do
