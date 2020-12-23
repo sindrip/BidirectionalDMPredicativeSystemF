@@ -16,13 +16,16 @@ To try out some of our examples, cd into the directory and launch ghci with the 
 $ cabal repl
 ```
 
-When you're in the repl, load in the Examples module and try calling synthType on some of them like one and succ(one) and compare the output.
+When you're in the repl, load in the Examples module and try calling infer on some of them like one and succ(zero) and compare the output.
 ```
 λ :m +Examples
-λ synthType one
-...
-λ synthType (App suc one)
-...
+
+λ infer one
+∀0': ∀1': ((1' → 0') → (1' → 0'))
+
+λ infer (App suc zero)
+∀0': ∀1': ((1' → 0') → (1' → 0'))
+
 ```
 
  

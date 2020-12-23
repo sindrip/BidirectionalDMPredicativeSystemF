@@ -184,3 +184,21 @@ checkType tm ty =
     case mt of
       Left e -> failWith e
       Right t -> subtype (apply ctx t) (apply ctx ty)
+
+ppTy :: CType a -> IO ()
+ppTy = putStrLn . go 0
+  where
+    go :: Int -> CType a -> String
+    go i (TyArrow ty1 ty2) = "(" ++ go i ty1 ++ " → " ++ go i ty2 ++ ")"
+    go _ TyUnit = "Unit"
+    go _ (TyVar (TyN (FreeName n))) = show n
+    go _ (TyVar (TyI (TyIdx j))) = show j ++ "'"
+    go _ (TyExists (FreeName n)) = "∃" ++ show n
+    go i (TyForall ty) = "∀" ++ show i ++ "': " ++ go (i + 1) ty
+
+infer :: Term -> IO ()
+infer tm =
+  let mty = synthType tm
+   in case mty of
+        Left e -> putStrLn e
+        Right ty -> ppTy ty
